@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Moneypit CLI wrapper
+# Usage: bin/mp <command> [options]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Add common bun install locations to PATH
+export PATH="$HOME/.bun/bin:$PATH"
+
+exec bun "$PROJECT_DIR/scripts/mp.ts" "$@"

@@ -1,0 +1,187 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AccountType {
+  ASSET      // Checking, Savings, Cash
+  LIABILITY  // Credit cards, Loans
+  EQUITY     // Opening balances, Retained earnings
+  INCOME     // Salary, Interest, Sales
+  EXPENSE    // All spending categories
+}
+
+enum TransactionStatus {
+  PENDING      // Needs categorization
+  CATEGORIZED  // Both sides assigned
+}
+
+enum AssetType {
+  LIQUID           // Banking - checking, savings, money market
+  BROKERAGE        // Taxable investment accounts - capital gains on sale
+  ROTH_RETIREMENT  // Roth IRA/401k - contributions accessible, earnings locked
+  TAX_DEFERRED     // Traditional IRA, 401(k), 403(b) - fully locked until 59½
+}
+
+model Book {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isDemo      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  accounts      Account[]
+  transactions  Transaction[]
+  taxCategories TaxCategory[]
+  taxModules    BookTaxModule[]
+  rules         Rule[]
+  operationLogs OperationLog[]
+}
+
+model Account {
+  id             String      @id @default(cuid())
+  bookId         String
+  book           Book        @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  type           AccountType
+  assetType      AssetType?  // Only for ASSET accounts - liquidity classification
+  path           String      // "Business:Hosting", "Chase Checking" (no type prefix)
+  last4          String?     // Last 4 digits of account number
+  openingBalance Decimal?    @db.Decimal(12, 2) // Starting balance before any transactions
+  taxCategoryId  String?
+  taxCategory    TaxCategory? @relation(fields: [taxCategoryId], references: [id])
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([bookId, type, path])
+  @@index([bookId])
+
+  debitTransactions  Transaction[] @relation("DebitAccount")
+  creditTransactions Transaction[] @relation("CreditAccount")
+  rules              Rule[]
+  balanceRecords     BalanceRecord[]
+}
+
+model BalanceRecord {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  date      DateTime
+  balance   Decimal  @db.Decimal(12, 2) // Statement balance as of this date
+  createdAt DateTime @default(now())
+
+  @@unique([accountId, date])
+  @@index([accountId])
+}
+
+model Transaction {
+  id              String            @id @default(cuid())
+  bookId          String
+  book            Book              @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  date            DateTime
+  description     String
+  memo            String?
+  amount          Decimal           @db.Decimal(12, 2) // Always positive
+  debitAccountId  String?           // Money going TO (null = pending categorization)
+  debitAccount    Account?          @relation("DebitAccount", fields: [debitAccountId], references: [id])
+  creditAccountId String?           // Money coming FROM (null = pending categorization)
+  creditAccount   Account?          @relation("CreditAccount", fields: [creditAccountId], references: [id])
+  status          TransactionStatus @default(PENDING)
+  importSource    String?           // "chase-checking-2025-03.csv"
+  importHash      String?           // For deduplication
+  mergedIntoId    String?           @map("merged_into_id") // If set, this tx was merged into another
+  mergedInto      Transaction?      @relation("MergedTransactions", fields: [mergedIntoId], references: [id])
+  mergedFrom      Transaction[]     @relation("MergedTransactions") // Txs that were merged into this one
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  dismissedDupes1 DismissedDuplicate[] @relation("DismissedTx1")
+  dismissedDupes2 DismissedDuplicate[] @relation("DismissedTx2")
+
+  @@unique([bookId, importHash])
+  @@index([bookId])
+  @@index([mergedIntoId])
+}
+
+// Tracks pairs of transactions that the user has confirmed are NOT duplicates
+model DismissedDuplicate {
+  id        String      @id @default(cuid())
+  tx1Id     String
+  tx2Id     String
+  tx1       Transaction @relation("DismissedTx1", fields: [tx1Id], references: [id], onDelete: Cascade)
+  tx2       Transaction @relation("DismissedTx2", fields: [tx2Id], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@unique([tx1Id, tx2Id])
+  @@index([tx1Id])
+  @@index([tx2Id])
+}
+
+model TaxCategory {
+  id          String    @id @default(cuid())
+  bookId      String
+  book        Book      @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  name        String    // "Home Office", "Business Travel"
+  description String?
+  scheduleRef String?   // "Schedule C Line 25", "Schedule A"
+  year        Int?      // Tax rules change by year
+  moduleId    String?   // Which module created this (null = user-created)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([bookId])
+
+  accounts    Account[]
+}
+
+model BookTaxModule {
+  id        String   @id @default(cuid())
+  bookId    String
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  moduleId  String   // e.g., "us-schedule-c"
+  enabledAt DateTime @default(now())
+
+  @@unique([bookId, moduleId])
+  @@index([bookId])
+}
+
+model Rule {
+  id          String   @id @default(cuid())
+  bookId      String
+  book        Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  pattern     String   // Regex or substring pattern
+  accountId   String   // Account to assign
+  account     Account  @relation(fields: [accountId], references: [id])
+  field       String   @default("description") // Which field to match
+  priority    Int      @default(0) // Higher = checked first
+  isRegex     Boolean  @default(false)
+
+  amountMin   Decimal? @db.Decimal(12, 2)  // Amount >= this value
+  amountMax   Decimal? @db.Decimal(12, 2)  // Amount <= this value
+  amountExact Decimal? @db.Decimal(12, 2)  // Amount == this value (overrides min/max)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([bookId])
+}
+
+model OperationLog {
+  id          String    @id @default(cuid())
+  bookId      String
+  book        Book      @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  operation   String    // "CREATE", "UPDATE", "DELETE", "CATEGORIZE", "MERGE", "IMPORT", "UNDO"
+  description String    // Human-readable: "Categorized 5 transactions as Business:Hosting"
+  changes     Json      // [{ entityType, entityId, before, after }]
+  undoneAt    DateTime? // Set when this operation is undone (informational)
+  createdAt   DateTime  @default(now())
+
+  @@index([bookId])
+  @@index([createdAt])
+}

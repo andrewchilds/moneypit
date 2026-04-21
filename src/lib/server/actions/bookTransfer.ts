@@ -1,0 +1,372 @@
+import { db } from '../db';
+import type { AccountType, AssetType, TransactionStatus } from '@prisma/client';
+
+// Export format version for future compatibility
+const EXPORT_VERSION = 1;
+
+export interface BookExport {
+	version: number;
+	exportedAt: string;
+	book: {
+		name: string;
+		description: string | null;
+		isDemo: boolean;
+	};
+	taxCategories: ExportedTaxCategory[];
+	accounts: ExportedAccount[];
+	rules: ExportedRule[];
+	transactions: ExportedTransaction[];
+	balanceRecords: ExportedBalanceRecord[];
+	dismissedDuplicates: ExportedDismissedDuplicate[];
+	enabledModules: string[];
+}
+
+interface ExportedTaxCategory {
+	id: string;
+	name: string;
+	description: string | null;
+	scheduleRef: string | null;
+	year: number | null;
+	moduleId: string | null;
+}
+
+interface ExportedAccount {
+	id: string;
+	type: AccountType;
+	assetType: AssetType | null;
+	path: string;
+	last4: string | null;
+	openingBalance: string | null;
+	taxCategoryId: string | null;
+}
+
+interface ExportedRule {
+	id: string;
+	pattern: string;
+	accountId: string;
+	field: string;
+	priority: number;
+	isRegex: boolean;
+	amountMin: string | null;
+	amountMax: string | null;
+	amountExact: string | null;
+}
+
+interface ExportedTransaction {
+	id: string;
+	date: string;
+	description: string;
+	memo: string | null;
+	amount: string;
+	debitAccountId: string | null;
+	creditAccountId: string | null;
+	status: TransactionStatus;
+	importSource: string | null;
+	importHash: string | null;
+	mergedIntoId: string | null;
+}
+
+interface ExportedBalanceRecord {
+	id: string;
+	accountId: string;
+	date: string;
+	balance: string;
+}
+
+interface ExportedDismissedDuplicate {
+	tx1Id: string;
+	tx2Id: string;
+}
+
+export async function exportBook(bookId: string): Promise<BookExport> {
+	const book = await db.book.findUnique({
+		where: { id: bookId },
+		include: {
+			taxCategories: true,
+			accounts: {
+				include: {
+					balanceRecords: true
+				}
+			},
+			rules: true,
+			transactions: {
+				include: {
+					dismissedDupes1: true
+				}
+			},
+			taxModules: true
+		}
+	});
+
+	if (!book) {
+		throw new Error(`Book not found: ${bookId}`);
+	}
+
+	// Collect all dismissed duplicates (avoid duplicates since we only query one side)
+	const dismissedDuplicates: ExportedDismissedDuplicate[] = [];
+	const seenPairs = new Set<string>();
+	for (const tx of book.transactions) {
+		for (const dd of tx.dismissedDupes1) {
+			const pairKey = [dd.tx1Id, dd.tx2Id].sort().join(':');
+			if (!seenPairs.has(pairKey)) {
+				seenPairs.add(pairKey);
+				dismissedDuplicates.push({
+					tx1Id: dd.tx1Id,
+					tx2Id: dd.tx2Id
+				});
+			}
+		}
+	}
+
+	// Collect all balance records
+	const balanceRecords: ExportedBalanceRecord[] = [];
+	for (const account of book.accounts) {
+		for (const br of account.balanceRecords) {
+			balanceRecords.push({
+				id: br.id,
+				accountId: br.accountId,
+				date: br.date.toISOString(),
+				balance: br.balance.toString()
+			});
+		}
+	}
+
+	return {
+		version: EXPORT_VERSION,
+		exportedAt: new Date().toISOString(),
+		book: {
+			name: book.name,
+			description: book.description,
+			isDemo: book.isDemo
+		},
+		taxCategories: book.taxCategories.map((tc) => ({
+			id: tc.id,
+			name: tc.name,
+			description: tc.description,
+			scheduleRef: tc.scheduleRef,
+			year: tc.year,
+			moduleId: tc.moduleId
+		})),
+		accounts: book.accounts.map((a) => ({
+			id: a.id,
+			type: a.type,
+			assetType: a.assetType,
+			path: a.path,
+			last4: a.last4,
+			openingBalance: a.openingBalance?.toString() ?? null,
+			taxCategoryId: a.taxCategoryId
+		})),
+		rules: book.rules.map((r) => ({
+			id: r.id,
+			pattern: r.pattern,
+			accountId: r.accountId,
+			field: r.field,
+			priority: r.priority,
+			isRegex: r.isRegex,
+			amountMin: r.amountMin?.toString() ?? null,
+			amountMax: r.amountMax?.toString() ?? null,
+			amountExact: r.amountExact?.toString() ?? null
+		})),
+		transactions: book.transactions.map((t) => ({
+			id: t.id,
+			date: t.date.toISOString(),
+			description: t.description,
+			memo: t.memo,
+			amount: t.amount.toString(),
+			debitAccountId: t.debitAccountId,
+			creditAccountId: t.creditAccountId,
+			status: t.status,
+			importSource: t.importSource,
+			importHash: t.importHash,
+			mergedIntoId: t.mergedIntoId
+		})),
+		balanceRecords,
+		dismissedDuplicates,
+		enabledModules: book.taxModules.map((tm) => tm.moduleId)
+	};
+}
+
+export interface ImportResult {
+	bookId: string;
+	bookName: string;
+	taxCategories: number;
+	accounts: number;
+	rules: number;
+	transactions: number;
+	balanceRecords: number;
+	dismissedDuplicates: number;
+	enabledModules: number;
+}
+
+export async function importBook(
+	data: BookExport,
+	options?: { name?: string; description?: string }
+): Promise<ImportResult> {
+	if (data.version !== EXPORT_VERSION) {
+		throw new Error(`Unsupported export version: ${data.version}. Expected: ${EXPORT_VERSION}`);
+	}
+
+	// Use provided name or add suffix to avoid conflicts
+	const bookName = options?.name ?? `${data.book.name} (imported)`;
+
+	// Check if book name already exists
+	const existingBook = await db.book.findUnique({ where: { name: bookName } });
+	if (existingBook) {
+		throw new Error(`A book named "${bookName}" already exists. Use --name to specify a different name.`);
+	}
+
+	// Create the new book
+	const newBook = await db.book.create({
+		data: {
+			name: bookName,
+			description: options?.description ?? data.book.description,
+			isDemo: data.book.isDemo
+		}
+	});
+
+	// Maps from old IDs to new IDs
+	const taxCategoryIdMap = new Map<string, string>();
+	const accountIdMap = new Map<string, string>();
+	const transactionIdMap = new Map<string, string>();
+
+	// 1. Create tax categories
+	for (const tc of data.taxCategories) {
+		const newTc = await db.taxCategory.create({
+			data: {
+				bookId: newBook.id,
+				name: tc.name,
+				description: tc.description,
+				scheduleRef: tc.scheduleRef,
+				year: tc.year,
+				moduleId: tc.moduleId
+			}
+		});
+		taxCategoryIdMap.set(tc.id, newTc.id);
+	}
+
+	// 2. Create accounts
+	for (const a of data.accounts) {
+		const newAccount = await db.account.create({
+			data: {
+				bookId: newBook.id,
+				type: a.type,
+				assetType: a.assetType,
+				path: a.path,
+				last4: a.last4,
+				openingBalance: a.openingBalance ? parseFloat(a.openingBalance) : null,
+				taxCategoryId: a.taxCategoryId ? taxCategoryIdMap.get(a.taxCategoryId) : null
+			}
+		});
+		accountIdMap.set(a.id, newAccount.id);
+	}
+
+	// 3. Create rules
+	for (const r of data.rules) {
+		const newAccountId = accountIdMap.get(r.accountId);
+		if (!newAccountId) {
+			console.warn(`Skipping rule "${r.pattern}": account ${r.accountId} not found`);
+			continue;
+		}
+		await db.rule.create({
+			data: {
+				bookId: newBook.id,
+				pattern: r.pattern,
+				accountId: newAccountId,
+				field: r.field,
+				priority: r.priority,
+				isRegex: r.isRegex,
+				amountMin: r.amountMin ? parseFloat(r.amountMin) : null,
+				amountMax: r.amountMax ? parseFloat(r.amountMax) : null,
+				amountExact: r.amountExact ? parseFloat(r.amountExact) : null
+			}
+		});
+	}
+
+	// 4. Create transactions (first pass - without mergedIntoId)
+	for (const t of data.transactions) {
+		const newTx = await db.transaction.create({
+			data: {
+				bookId: newBook.id,
+				date: new Date(t.date),
+				description: t.description,
+				memo: t.memo,
+				amount: parseFloat(t.amount),
+				debitAccountId: t.debitAccountId ? accountIdMap.get(t.debitAccountId) : null,
+				creditAccountId: t.creditAccountId ? accountIdMap.get(t.creditAccountId) : null,
+				status: t.status,
+				importSource: t.importSource,
+				importHash: t.importHash
+				// mergedIntoId set in second pass
+			}
+		});
+		transactionIdMap.set(t.id, newTx.id);
+	}
+
+	// 5. Update mergedIntoId references
+	for (const t of data.transactions) {
+		if (t.mergedIntoId) {
+			const newTxId = transactionIdMap.get(t.id);
+			const newMergedIntoId = transactionIdMap.get(t.mergedIntoId);
+			if (newTxId && newMergedIntoId) {
+				await db.transaction.update({
+					where: { id: newTxId },
+					data: { mergedIntoId: newMergedIntoId }
+				});
+			}
+		}
+	}
+
+	// 6. Create balance records
+	for (const br of data.balanceRecords) {
+		const newAccountId = accountIdMap.get(br.accountId);
+		if (!newAccountId) {
+			console.warn(`Skipping balance record: account ${br.accountId} not found`);
+			continue;
+		}
+		await db.balanceRecord.create({
+			data: {
+				accountId: newAccountId,
+				date: new Date(br.date),
+				balance: parseFloat(br.balance)
+			}
+		});
+	}
+
+	// 7. Create dismissed duplicates
+	let dismissedCreated = 0;
+	for (const dd of data.dismissedDuplicates) {
+		const newTx1Id = transactionIdMap.get(dd.tx1Id);
+		const newTx2Id = transactionIdMap.get(dd.tx2Id);
+		if (newTx1Id && newTx2Id) {
+			await db.dismissedDuplicate.create({
+				data: {
+					tx1Id: newTx1Id,
+					tx2Id: newTx2Id
+				}
+			});
+			dismissedCreated++;
+		}
+	}
+
+	// 8. Create enabled modules
+	for (const moduleId of data.enabledModules) {
+		await db.bookTaxModule.create({
+			data: {
+				bookId: newBook.id,
+				moduleId
+			}
+		});
+	}
+
+	return {
+		bookId: newBook.id,
+		bookName: newBook.name,
+		taxCategories: data.taxCategories.length,
+		accounts: data.accounts.length,
+		rules: data.rules.length,
+		transactions: data.transactions.length,
+		balanceRecords: data.balanceRecords.length,
+		dismissedDuplicates: dismissedCreated,
+		enabledModules: data.enabledModules.length
+	};
+}
