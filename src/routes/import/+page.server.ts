@@ -10,8 +10,8 @@ export async function load({ locals }) {
 	const { bookId } = locals;
 	const accounts = await listAccounts(bookId);
 
-	// Filter to ASSET and LIABILITY accounts (bank accounts, credit cards)
-	const importableAccounts = accounts.filter((a) => a.type === "ASSET" || a.type === "LIABILITY");
+	// Filter to ASSET, LIABILITY, and INCOME accounts (bank accounts, credit cards, income sources)
+	const importableAccounts = accounts.filter((a) => a.type === "ASSET" || a.type === "LIABILITY" || a.type === "INCOME");
 
 	return {
 		accounts: importableAccounts.map((a) => ({
