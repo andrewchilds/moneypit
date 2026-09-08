@@ -42,7 +42,7 @@ change *after* the network goes idle. `click` waits for both; if a step still
 races, add `wait 500` before the shot. Pages you can `goto` directly:
 
     /  /accounts  /accounts/<id>  /transactions  /transactions/<id>  /categorize
-    /merge  /import  /activity  /reports/tax?year=2025
+    /merge  /import  /activity  /tax/2025  /reports/tax?year=2025
     /reports/expenses?range=custom&year=2025  /reports/net-worth
 """
 

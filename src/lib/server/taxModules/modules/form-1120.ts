@@ -30,5 +30,48 @@ export const form1120: TaxModule = {
 		{ name: 'Pension & Profit Sharing', scheduleRef: 'Form 1120 Line 23', description: 'Pension, profit-sharing, etc., plans' },
 		{ name: 'Employee Benefits', scheduleRef: 'Form 1120 Line 24', description: 'Employee benefit programs' },
 		{ name: 'Other Deductions', scheduleRef: 'Form 1120 Line 26', description: 'Other deductions' },
+	],
+	questions: [
+		{ key: 'incorporation_date', prompt: 'Date of incorporation', type: 'date', carryForward: true },
+		{ key: 'state_of_incorporation', prompt: 'State of incorporation', type: 'text', carryForward: true },
+		{
+			key: 'states_doing_business',
+			prompt: 'States where the corporation does business (state returns needed)',
+			type: 'text',
+			carryForward: true
+		},
+		{
+			key: 'accounting_method',
+			prompt: 'Accounting method',
+			type: 'choice',
+			carryForward: true,
+			options: [
+				{ value: 'cash', label: 'Cash' },
+				{ value: 'accrual', label: 'Accrual' }
+			]
+		},
+		{ key: 'corp_extension_filed', prompt: 'Was Form 7004 (extension) filed for this year?', type: 'boolean' },
+		{
+			key: 'corp_extension_payment',
+			prompt: 'Amount paid with Form 7004',
+			type: 'amount',
+			dependsOn: { key: 'corp_extension_filed', value: true }
+		},
+		{
+			key: 'corp_estimated_payments',
+			prompt: 'Federal estimated tax payments made for this year (total)',
+			type: 'amount'
+		},
+		{
+			key: 'shareholder_paid_expenses',
+			prompt: 'Expenses paid personally by shareholders and not yet recorded in this book',
+			type: 'amount',
+			description: 'Better to record them as transactions against a shareholder loan account; use this only as a reminder'
+		},
+		{
+			key: 'organizational_costs_election',
+			prompt: 'Elect to deduct organizational and startup costs (Section 248/195) in the first year?',
+			type: 'boolean'
+		}
 	]
 };

@@ -1,6 +1,8 @@
 import { db } from '../db';
 import { Prisma } from '@prisma/client';
 import type { AssetType, AccountType } from '@prisma/client';
+import { getDocumentTotalsByCategory, type DocumentLineRef } from './taxDocuments';
+import { getTaxYearStatus } from './taxYear';
 
 export interface StackedBarSegment {
 	label: string;
@@ -234,7 +236,13 @@ export interface TaxCategoryTotal {
 	scheduleRef: string | null;
 	description: string | null;
 	accountType: AccountType;
+	/** Total per the books (transactions) */
 	total: number;
+	/** Total per received tax documents mapped to this category, if any */
+	documentTotal: number | null;
+	documentLines: DocumentLineRef[];
+	/** The figure to report: the document total when one exists, else the book total */
+	reportedTotal: number;
 	accounts: {
 		id: string;
 		path: string;
@@ -250,6 +258,11 @@ export interface ScheduleSection {
 	totalIncome: number;
 	totalExpenses: number;
 	netAmount: number;
+	/** True when any category in the section has a document figure */
+	hasDocuments: boolean;
+	reportedIncome: number;
+	reportedExpenses: number;
+	reportedNet: number;
 }
 
 export interface TaxReportData {
@@ -273,6 +286,13 @@ export interface TaxReportData {
 		path: string;
 		total: number;
 	}[];
+	// Income earned inside retirement accounts, excluded from the totals above
+	retirementIncomeExcluded: number;
+	// Open items from the tax year questionnaire and expected documents
+	openQuestions: number;
+	missingDocuments: number;
+	// Received document lines with no tax category, so they appear nowhere above
+	unmappedDocumentLines: number;
 }
 
 // Expenses Report Types and Functions
@@ -501,36 +521,61 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	const incomeAccounts = accounts.filter((a) => a.type === 'INCOME');
 	const expenseAccounts = accounts.filter((a) => a.type === 'EXPENSE');
 
-	// Get transaction totals per account for the year
-	// For income: money flows FROM income TO asset (credit side is income)
-	// For expense: money flows FROM asset TO expense (debit side is expense)
+	const [documentTotals, yearStatus, allCategories, unmappedDocumentLines] = await Promise.all([
+		getDocumentTotalsByCategory(bookId, year),
+		getTaxYearStatus(bookId, year),
+		db.taxCategory.findMany({ where: { bookId } }),
+		db.taxDocumentLine.count({ where: { taxCategoryId: null, document: { bookId, year, status: 'RECEIVED' } } })
+	]);
+
+	// Get transaction totals per account for the year.
+	// Income accounts are normally credited and expense accounts debited, but
+	// refunds and reversals land on the opposite side, so net the two directions.
+	// Money earned inside a retirement account (dividends in an IRA, for example)
+	// is not taxable income, so transactions whose other side is a
+	// ROTH_RETIREMENT or TAX_DEFERRED asset account are excluded.
 	const accountTotals = await db.$queryRaw<{ accountId: string; total: number }[]>`
 		SELECT
 			a.id as "accountId",
-			COALESCE(
-				CASE
-					WHEN a.type = 'INCOME' THEN (
-						SELECT SUM(t.amount)
-						FROM "Transaction" t
-						WHERE t."creditAccountId" = a.id
-						AND t.date >= ${startDate}
-						AND t.date <= ${endDate}
-						AND t."merged_into_id" IS NULL
-					)
-					WHEN a.type = 'EXPENSE' THEN (
-						SELECT SUM(t.amount)
-						FROM "Transaction" t
-						WHERE t."debitAccountId" = a.id
-						AND t.date >= ${startDate}
-						AND t.date <= ${endDate}
-						AND t."merged_into_id" IS NULL
-					)
-				END,
-				0
-			) as total
+			COALESCE((
+				SELECT SUM(
+					CASE
+						WHEN a.type = 'INCOME' AND t."creditAccountId" = a.id THEN t.amount
+						WHEN a.type = 'EXPENSE' AND t."debitAccountId" = a.id THEN t.amount
+						ELSE -t.amount
+					END
+				)
+				FROM "Transaction" t
+				LEFT JOIN "Account" other ON other.id = CASE
+					WHEN t."debitAccountId" = a.id THEN t."creditAccountId"
+					ELSE t."debitAccountId"
+				END
+				WHERE (t."debitAccountId" = a.id OR t."creditAccountId" = a.id)
+				AND t.date >= ${startDate}
+				AND t.date <= ${endDate}
+				AND t."merged_into_id" IS NULL
+				AND (other."assetType" IS NULL OR other."assetType"::text NOT IN ('ROTH_RETIREMENT', 'TAX_DEFERRED'))
+			), 0) as total
 		FROM "Account" a
-		WHERE a.type IN ('INCOME', 'EXPENSE')
+		WHERE a."bookId" = ${bookId}
+		AND a.type IN ('INCOME', 'EXPENSE')
 	`;
+
+	// Income credited from retirement accounts, reported separately so the
+	// exclusion above is visible rather than silent.
+	const retirementRows = await db.$queryRaw<{ total: number }[]>`
+		SELECT COALESCE(SUM(t.amount), 0) as total
+		FROM "Transaction" t
+		JOIN "Account" income ON income.id = t."creditAccountId"
+		JOIN "Account" other ON other.id = t."debitAccountId"
+		WHERE income."bookId" = ${bookId}
+		AND income.type = 'INCOME'
+		AND other."assetType"::text IN ('ROTH_RETIREMENT', 'TAX_DEFERRED')
+		AND t.date >= ${startDate}
+		AND t.date <= ${endDate}
+		AND t."merged_into_id" IS NULL
+	`;
+	const retirementIncomeExcluded = Number(retirementRows[0]?.total ?? 0);
 
 	// Build a map of account id -> total
 	const totalMap = new Map<string, number>();
@@ -571,19 +616,54 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 					description: account.taxCategory?.description ?? null,
 					accountType,
 					total: 0,
+					documentTotal: null,
+					documentLines: [],
+					reportedTotal: 0,
 					accounts: []
 				});
 			}
 
 			const cat = categoryMap.get(key)!;
 			cat.total += total;
+			cat.reportedTotal = cat.total;
 			cat.accounts.push({ id: account.id, path: account.path, total });
 		}
 
+		// Categories with document figures but no account activity still belong
+		// in the report: a 1099-B's capital gains have no book transactions.
+		const accountCategoryIds = new Set(accountList.map((a) => a.taxCategoryId));
+		for (const category of allCategories) {
+			if (!documentTotals.has(category.id) || categoryMap.has(category.id)) continue;
+			if (accountCategoryIds.has(category.id)) continue;
+			if (classifyDocumentOnlyCategory(category.name, category.scheduleRef) !== accountType) continue;
+			categoryMap.set(category.id, {
+				taxCategoryId: category.id,
+				taxCategoryName: category.name,
+				scheduleRef: category.scheduleRef,
+				description: category.description,
+				accountType,
+				total: 0,
+				documentTotal: null,
+				documentLines: [],
+				reportedTotal: 0,
+				accounts: []
+			});
+		}
+
+		// Overlay document figures
+		for (const cat of categoryMap.values()) {
+			const docs = cat.taxCategoryId ? documentTotals.get(cat.taxCategoryId) : undefined;
+			if (docs) {
+				cat.documentTotal = docs.total;
+				cat.documentLines = docs.lines;
+				cat.reportedTotal = docs.total;
+			}
+		}
+
 		// Separate deductible from non-deductible categories
-		const allCategories = Array.from(categoryMap.values());
-		const deductible = allCategories.filter((c) => !nonDeductibleCategories.has(c.taxCategoryName));
-		const nonDeductibleItems = allCategories.filter((c) => nonDeductibleCategories.has(c.taxCategoryName));
+		const allCategoryTotals = Array.from(categoryMap.values());
+		const deductible = allCategoryTotals.filter((c) => !nonDeductibleCategories.has(c.taxCategoryName));
+		const nonDeductibleItems = allCategoryTotals.filter((c) => nonDeductibleCategories.has(c.taxCategoryName));
 
 		// Sort categories by schedule reference for logical ordering
 		const sortCategories = (cats: TaxCategoryTotal[]) =>
@@ -669,6 +749,8 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		const data = scheduleMap.get(schedule)!;
 		const totalIncome = data.income.reduce((sum, c) => sum + c.total, 0);
 		const totalExpenses = data.expenses.reduce((sum, c) => sum + c.total, 0);
+		const reportedIncome = data.income.reduce((sum, c) => sum + c.reportedTotal, 0);
+		const reportedExpenses = data.expenses.reduce((sum, c) => sum + c.reportedTotal, 0);
 		return {
 			schedule,
 			description: scheduleDescriptions[schedule] ?? '',
@@ -676,7 +758,11 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 			expenseCategories: data.expenses,
 			totalIncome,
 			totalExpenses,
-			netAmount: totalIncome - totalExpenses
+			netAmount: totalIncome - totalExpenses,
+			hasDocuments: [...data.income, ...data.expenses].some((c) => c.documentTotal !== null),
+			reportedIncome,
+			reportedExpenses,
+			reportedNet: reportedIncome - reportedExpenses
 		};
 	});
 
@@ -689,6 +775,22 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 			income: incomeGrouped.nonDeductible
 		},
 		uncategorizedExpenses: expenseGrouped.uncategorized.sort((a, b) => b.total - a.total),
-		uncategorizedIncome: incomeGrouped.uncategorized.sort((a, b) => b.total - a.total)
+		uncategorizedIncome: incomeGrouped.uncategorized.sort((a, b) => b.total - a.total),
+		retirementIncomeExcluded,
+		openQuestions: yearStatus.openQuestions,
+		missingDocuments: yearStatus.missingDocuments,
+		unmappedDocumentLines
 	};
+}
+
+/**
+ * A category that only has document figures has no accounts to tell us
+ * whether it is income or a deduction, so guess from its name and line.
+ */
+function classifyDocumentOnlyCategory(name: string, scheduleRef: string | null): AccountType {
+	const text = `${name} ${scheduleRef ?? ''}`;
+	if (/deduct|expense|interest paid|mortgage|real estate tax|property tax|state & local|charitable|medical|contribution|premium|withheld|estimated|insurance|tuition/i.test(text)) {
+		return 'EXPENSE';
+	}
+	return 'INCOME';
 }

@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { AccountType, AssetType, TransactionStatus } from '@prisma/client';
+import type { AccountType, AssetType, TransactionStatus, TaxDocumentStatus, Prisma } from '@prisma/client';
 
 // Export format version for future compatibility
 const EXPORT_VERSION = 1;
@@ -19,6 +19,31 @@ export interface BookExport {
 	balanceRecords: ExportedBalanceRecord[];
 	dismissedDuplicates: ExportedDismissedDuplicate[];
 	enabledModules: string[];
+	// Added later; absent in older exports
+	taxDocuments?: ExportedTaxDocument[];
+	taxFacts?: ExportedTaxFact[];
+}
+
+interface ExportedTaxDocument {
+	id: string;
+	year: number;
+	formType: string;
+	issuer: string;
+	status: TaxDocumentStatus;
+	accountId: string | null;
+	notes: string | null;
+	lines: {
+		box: string;
+		label: string;
+		amount: string;
+		taxCategoryId: string | null;
+	}[];
+}
+
+interface ExportedTaxFact {
+	year: number | null;
+	key: string;
+	value: unknown;
 }
 
 interface ExportedTaxCategory {
@@ -94,7 +119,9 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 					dismissedDupes1: true
 				}
 			},
-			taxModules: true
+			taxModules: true,
+			taxDocuments: { include: { lines: true } },
+			taxFacts: true
 		}
 	});
 
@@ -182,7 +209,23 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 		})),
 		balanceRecords,
 		dismissedDuplicates,
-		enabledModules: book.taxModules.map((tm) => tm.moduleId)
+		enabledModules: book.taxModules.map((tm) => tm.moduleId),
+		taxDocuments: book.taxDocuments.map((d) => ({
+			id: d.id,
+			year: d.year,
+			formType: d.formType,
+			issuer: d.issuer,
+			status: d.status,
+			accountId: d.accountId,
+			notes: d.notes,
+			lines: d.lines.map((l) => ({
+				box: l.box,
+				label: l.label,
+				amount: l.amount.toString(),
+				taxCategoryId: l.taxCategoryId
+			}))
+		})),
+		taxFacts: book.taxFacts.map((f) => ({ year: f.year, key: f.key, value: f.value }))
 	};
 }
 
@@ -196,6 +239,8 @@ export interface ImportResult {
 	balanceRecords: number;
 	dismissedDuplicates: number;
 	enabledModules: number;
+	taxDocuments: number;
+	taxFacts: number;
 }
 
 export async function importBook(
@@ -358,9 +403,42 @@ export async function importBook(
 		});
 	}
 
+	// 9. Create tax documents and facts
+	const taxDocuments = data.taxDocuments ?? [];
+	for (const d of taxDocuments) {
+		await db.taxDocument.create({
+			data: {
+				bookId: newBook.id,
+				year: d.year,
+				formType: d.formType,
+				issuer: d.issuer,
+				status: d.status,
+				accountId: d.accountId ? (accountIdMap.get(d.accountId) ?? null) : null,
+				notes: d.notes,
+				lines: {
+					create: d.lines.map((l) => ({
+						box: l.box,
+						label: l.label,
+						amount: parseFloat(l.amount),
+						taxCategoryId: l.taxCategoryId ? (taxCategoryIdMap.get(l.taxCategoryId) ?? null) : null
+					}))
+				}
+			}
+		});
+	}
+
+	const taxFacts = data.taxFacts ?? [];
+	for (const f of taxFacts) {
+		await db.taxFact.create({
+			data: { bookId: newBook.id, year: f.year, key: f.key, value: f.value as Prisma.InputJsonValue }
+		});
+	}
+
 	return {
 		bookId: newBook.id,
 		bookName: newBook.name,
+		taxDocuments: taxDocuments.length,
+		taxFacts: taxFacts.length,
 		taxCategories: data.taxCategories.length,
 		accounts: data.accounts.length,
 		rules: data.rules.length,

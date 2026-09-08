@@ -15,6 +15,7 @@
 		ListChecks,
 		GitMerge,
 		FileText,
+		ClipboardList,
 		History,
 		PanelLeftClose,
 		PanelLeftOpen,
@@ -91,6 +92,7 @@
 		{ href: "/merge", icon: GitMerge, label: "Merge" },
 		{ href: "/import", icon: Upload, label: "Import" },
 		{ href: "/reports", icon: FileText, label: "Reports" },
+		{ href: "/tax", icon: ClipboardList, label: "Tax Prep" },
 		{ href: "/activity", icon: History, label: "Activity" },
 		{
 			href: "#settings",

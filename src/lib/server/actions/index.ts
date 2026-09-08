@@ -7,3 +7,6 @@ export * from './import';
 export * from './operationLog';
 export * from './reports';
 export * from './balanceRecords';
+export * from './taxDocuments';
+export * from './taxFacts';
+export * from './taxYear';

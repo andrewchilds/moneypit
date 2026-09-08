@@ -138,8 +138,8 @@ DEMO
 ACCOUNTS
   account:list [--type <type>] [--prefix <path>] [--condensed]
   account:get <id>
-  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>]
-  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>]
+  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>]
+  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>]
   account:delete <id>
   account:tree [--type <type>]
 
@@ -169,6 +169,24 @@ TAX MODULES
   module:enable <id>      Enable a module (seeds its categories)
   module:disable <id>     Disable a module (deletes unused categories)
 
+TAX YEAR (questions, documents, and figures that don't map to transactions)
+  tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
+  tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
+  fact:list [--year <year>]             Questions from enabled modules with their answers
+  fact:set <key> <value> [--year <year>] [--carry-forward]
+  fact:get <key> [--year <year>]
+  fact:delete <key> [--year <year>] [--carry-forward]
+
+TAX DOCUMENTS (W-2, 1099s, 1098, 1095-A, ...)
+  doc:list [--year <year>] [--condensed]
+  doc:get <id>
+  doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--notes <text>] [--na]
+  doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--notes <text>] [--status received|na]
+  doc:delete <id>
+  doc:line <doc-id> --box <box> --amount <amount> [--label <text>] [--category <id|name>] [--no-category]
+  doc:line-delete <line-id>
+  doc:forms                             Known form types and their boxes
+
 RULES
   rule:list
   rule:get <id>
@@ -195,8 +213,38 @@ OPERATION LOG
   log:undo <id>             Undo an operation
 
 ACCOUNT TYPES: asset, liability, equity, income, expense
+ASSET TYPES: liquid, brokerage, roth_retirement, tax_deferred
 TRANSACTION STATUS: pending, categorized
 ```
+
+## Tax Prep
+
+Transactions only cover money that moved through a tracked account. Two other
+kinds of records complete a tax year, both per book and per year, and both
+visible at `/tax/<year>` and via `bin/mp tax:status`:
+
+- **Tax facts** answer the questions each enabled tax module declares
+  (`questions` in `src/lib/server/taxModules/modules/*.ts`): filing status,
+  whether an extension was filed, Roth basis, property use. Set them with
+  `fact:set <key> <value>`. Questions marked `carryForward` are stored without
+  a year and apply until changed. A question can `dependsOn` another answer.
+- **Tax documents** are the forms received (W-2, 1099-INT, 1099-B, 1098,
+  1095-A, ...). Each has lines keyed by box number. A line mapped to a tax
+  category is the authoritative figure for that category: the tax report
+  shows it beside the book total with the variance, and uses it in totals.
+  Categories with document figures but no accounts (1099-B capital gains) still
+  appear. Lines on `NOT_APPLICABLE` documents are ignored.
+- **Expected documents** are inferred from the year's transactions (interest
+  received implies a 1099-INT, brokerage withdrawals a 1099-B, retirement
+  distributions a 1099-R, mortgage interest a 1098) and from answers
+  (`expectedDocuments` in a module). Satisfy one by adding a document of that
+  form type from the same institution, or mark it not applicable with `--na`.
+
+`--year` defaults to the most recently completed calendar year. Boxes listed by
+`doc:forms` get a label and a guessed category automatically; pass
+`--category <id|name>` to override or `--no-category` to leave a line unmapped.
+Income earned inside ROTH_RETIREMENT and TAX_DEFERRED asset accounts is excluded
+from the tax report, and refunds credited to expense accounts reduce the total.
 
 ## Development
 

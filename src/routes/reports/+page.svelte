@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { TrendingUp, FileText, Receipt } from 'lucide-svelte';
+	import { TrendingUp, FileText, Receipt, ClipboardList } from 'lucide-svelte';
 </script>
 
 <div class="reports-page">
@@ -24,6 +24,12 @@
 			<FileText size={32} strokeWidth={1.5} />
 			<h3>Tax Report</h3>
 			<p>Schedule C and self-employment taxes</p>
+		</a>
+
+		<a href="/tax" class="report-card">
+			<ClipboardList size={32} strokeWidth={1.5} />
+			<h3>Tax Prep</h3>
+			<p>Questions, tax forms, and open items by year</p>
 		</a>
 	</div>
 </div>

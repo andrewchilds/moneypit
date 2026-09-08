@@ -25,5 +25,18 @@ export const caState: TaxModule = {
 		{ name: 'CA Mental Health Tax', scheduleRef: 'CA 540 Line 62', description: 'Mental Health Services Tax (1% on income over $1M)' },
 		// SDI
 		{ name: 'CA SDI Withheld', scheduleRef: 'CA 540 Line 74', description: 'State Disability Insurance withheld (excess may be refundable)' },
+	],
+	questions: [
+		{
+			key: 'ca_residency',
+			prompt: 'California residency for the year',
+			type: 'choice',
+			options: [
+				{ value: 'full_year', label: 'Full-year resident' },
+				{ value: 'part_year', label: 'Part-year resident' },
+				{ value: 'nonresident', label: 'Nonresident' }
+			]
+		},
+		{ key: 'ca_extension_payment', prompt: 'Amount paid with a CA extension (FTB 3519)', type: 'amount' }
 	]
 };

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronRight, ChevronDown, DollarSign, FileText, AlertTriangle, TrendingUp } from "lucide-svelte";
+	import { ChevronRight, ChevronDown, DollarSign, FileText, AlertTriangle, Info, TrendingUp } from "lucide-svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import type { PageData } from "./$types";
@@ -7,7 +7,14 @@
 
 	let { data }: { data: PageData } = $props();
 
+	type Section = PageData["taxData"]["sections"][number];
+	type Category = Section["incomeCategories"][number];
+
 	let expandedCategories = $state<Set<string>>(new Set());
+
+	const isExpandable = (category: Category) => category.accounts.length > 1 || category.documentLines.length > 0;
+
+	const openItems = $derived(data.taxData.openQuestions + data.taxData.missingDocuments);
 
 	function toggleCategory(id: string) {
 		if (expandedCategories.has(id)) {
@@ -50,12 +57,12 @@
 		data.taxData.uncategorizedIncome.reduce((sum, a) => sum + a.total, 0)
 	);
 
-	// Compute totals from all sections
+	// Compute totals from all sections, using document figures where they exist
 	const totalIncome = $derived(
-		data.taxData.sections.reduce((sum, s) => sum + s.totalIncome, 0)
+		data.taxData.sections.reduce((sum, s) => sum + s.reportedIncome, 0)
 	);
 	const totalExpenses = $derived(
-		data.taxData.sections.reduce((sum, s) => sum + s.totalExpenses, 0)
+		data.taxData.sections.reduce((sum, s) => sum + s.reportedExpenses, 0)
 	);
 	const netAmount = $derived(totalIncome - totalExpenses);
 </script>
@@ -95,6 +102,124 @@
 		</div>
 	{/if}
 
+	{#if openItems > 0 || data.taxData.unmappedDocumentLines > 0}
+		<div class="warning-banner">
+			<AlertTriangle size={20} />
+			<span>
+				{#if openItems > 0}
+					<strong>{data.taxData.openQuestions}</strong> unanswered question{data.taxData.openQuestions === 1 ? "" : "s"} and
+					<strong>{data.taxData.missingDocuments}</strong> missing document{data.taxData.missingDocuments === 1 ? "" : "s"}.
+				{/if}
+				{#if data.taxData.unmappedDocumentLines > 0}
+					<strong>{data.taxData.unmappedDocumentLines}</strong> document line{data.taxData.unmappedDocumentLines === 1 ? "" : "s"} without a tax category.
+				{/if}
+				<a href="/tax/{data.taxData.year}">Open tax prep</a>
+			</span>
+		</div>
+	{/if}
+
+	{#if data.taxData.retirementIncomeExcluded > 0}
+		<div class="info-banner">
+			<Info size={20} />
+			<span>
+				<strong>{formatCurrency(data.taxData.retirementIncomeExcluded)}</strong> of income earned inside
+				retirement accounts is excluded from this report because it is not taxable when earned.
+			</span>
+		</div>
+	{/if}
+
+	{#snippet categoryTable(section: Section, categories: Category[], kind: string, title: string, bookTotal: number, reportedTotal: number)}
+		<div class="subsection">
+			<h3>{title}</h3>
+			<table class="tax-table">
+				<thead>
+					<tr>
+						<th>Line</th>
+						<th>Category</th>
+						{#if section.hasDocuments}
+							<th class="amount">Per Books</th>
+							<th class="amount">Per Documents</th>
+							<th class="amount">Variance</th>
+						{:else}
+							<th class="amount">Amount</th>
+						{/if}
+					</tr>
+				</thead>
+				<tbody>
+					{#each categories as category (category.taxCategoryId)}
+						{@const key = `${section.schedule}-${kind}-${category.taxCategoryId}`}
+						<tr
+							class="category-row"
+							class:expandable={isExpandable(category)}
+							onclick={() => isExpandable(category) && toggleCategory(key)}
+						>
+							<td class="line-ref">{category.scheduleRef ?? "—"}</td>
+							<td class="category-name">
+								{#if isExpandable(category)}
+									{#if expandedCategories.has(key)}
+										<ChevronDown size={16} />
+									{:else}
+										<ChevronRight size={16} />
+									{/if}
+								{/if}
+								{category.taxCategoryName}
+							</td>
+							{#if section.hasDocuments}
+								<td class="amount" class:superseded={category.documentTotal !== null}>{formatCurrencyPrecise(category.total)}</td>
+								<td class="amount">{category.documentTotal !== null ? formatCurrencyPrecise(category.documentTotal) : "—"}</td>
+								<td class="amount variance" class:nonzero={category.documentTotal !== null && Math.abs(category.documentTotal - category.total) >= 0.01}>
+									{category.documentTotal !== null ? formatCurrencyPrecise(category.documentTotal - category.total) : "—"}
+								</td>
+							{:else}
+								<td class="amount">{formatCurrencyPrecise(category.total)}</td>
+							{/if}
+						</tr>
+						{#if expandedCategories.has(key)}
+							{#each category.accounts as account (account.id)}
+								<tr class="account-row">
+									<td></td>
+									<td class="account-path">{account.path}</td>
+									<td class="amount">{formatCurrencyPrecise(account.total)}</td>
+									{#if section.hasDocuments}
+										<td></td>
+										<td></td>
+									{/if}
+								</tr>
+							{/each}
+							{#each category.documentLines as line (line.documentId + line.box)}
+								<tr class="account-row document-line">
+									<td></td>
+									<td class="account-path">
+										<a href="/tax/{data.taxData.year}#doc-{line.documentId}">{line.formType} · {line.issuer}</a>
+										<span class="box-label">box {line.box}, {line.label}</span>
+									</td>
+									{#if section.hasDocuments}
+										<td></td>
+										<td class="amount">{formatCurrencyPrecise(line.amount)}</td>
+										<td></td>
+									{:else}
+										<td class="amount">{formatCurrencyPrecise(line.amount)}</td>
+									{/if}
+								</tr>
+							{/each}
+						{/if}
+					{/each}
+					<tr class="total-row">
+						<td></td>
+						<td><strong>Total {title}</strong></td>
+						{#if section.hasDocuments}
+							<td class="amount"><strong>{formatCurrencyPrecise(bookTotal)}</strong></td>
+							<td class="amount"><strong>{formatCurrencyPrecise(reportedTotal)}</strong></td>
+							<td class="amount"><strong>{formatCurrencyPrecise(reportedTotal - bookTotal)}</strong></td>
+						{:else}
+							<td class="amount"><strong>{formatCurrencyPrecise(bookTotal)}</strong></td>
+						{/if}
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	{/snippet}
+
 	<!-- Dynamic Schedule Sections -->
 	{#each data.taxData.sections as section (section.schedule)}
 		<section class="report-section">
@@ -103,116 +228,27 @@
 				<p class="section-description">{section.description}</p>
 			{/if}
 
-			<!-- Income subsection -->
 			{#if section.incomeCategories.length > 0}
-				<div class="subsection">
-					<h3>Income</h3>
-					<table class="tax-table">
-						<thead>
-							<tr>
-								<th>Line</th>
-								<th>Category</th>
-								<th class="amount">Amount</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each section.incomeCategories as category (category.taxCategoryId)}
-								<tr
-									class="category-row"
-									class:expandable={category.accounts.length > 1}
-									onclick={() => category.accounts.length > 1 && toggleCategory(`${section.schedule}-inc-${category.taxCategoryId}`)}
-								>
-									<td class="line-ref">{category.scheduleRef ?? '—'}</td>
-									<td class="category-name">
-										{#if category.accounts.length > 1}
-											{#if expandedCategories.has(`${section.schedule}-inc-${category.taxCategoryId}`)}
-												<ChevronDown size={16} />
-											{:else}
-												<ChevronRight size={16} />
-											{/if}
-										{/if}
-										{category.taxCategoryName}
-									</td>
-									<td class="amount">{formatCurrencyPrecise(category.total)}</td>
-								</tr>
-								{#if expandedCategories.has(`${section.schedule}-inc-${category.taxCategoryId}`)}
-									{#each category.accounts as account (account.id)}
-										<tr class="account-row">
-											<td></td>
-											<td class="account-path">{account.path}</td>
-											<td class="amount">{formatCurrencyPrecise(account.total)}</td>
-										</tr>
-									{/each}
-								{/if}
-							{/each}
-							<tr class="total-row">
-								<td></td>
-								<td><strong>Total Income</strong></td>
-								<td class="amount"><strong>{formatCurrencyPrecise(section.totalIncome)}</strong></td>
-							</tr>
-						</tbody>
-					</table>
-				</div>
+				{@render categoryTable(section, section.incomeCategories, "inc", "Income", section.totalIncome, section.reportedIncome)}
 			{/if}
 
-			<!-- Expenses subsection -->
 			{#if section.expenseCategories.length > 0}
-				<div class="subsection">
-					<h3>{section.schedule === 'Schedule A' ? 'Deductions' : 'Expenses'}</h3>
-					<table class="tax-table">
-						<thead>
-							<tr>
-								<th>Line</th>
-								<th>Category</th>
-								<th class="amount">Amount</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each section.expenseCategories as category (category.taxCategoryId)}
-								<tr
-									class="category-row"
-									class:expandable={category.accounts.length > 1}
-									onclick={() => category.accounts.length > 1 && toggleCategory(`${section.schedule}-exp-${category.taxCategoryId}`)}
-								>
-									<td class="line-ref">{category.scheduleRef ?? '—'}</td>
-									<td class="category-name">
-										{#if category.accounts.length > 1}
-											{#if expandedCategories.has(`${section.schedule}-exp-${category.taxCategoryId}`)}
-												<ChevronDown size={16} />
-											{:else}
-												<ChevronRight size={16} />
-											{/if}
-										{/if}
-										{category.taxCategoryName}
-									</td>
-									<td class="amount">{formatCurrencyPrecise(category.total)}</td>
-								</tr>
-								{#if expandedCategories.has(`${section.schedule}-exp-${category.taxCategoryId}`)}
-									{#each category.accounts as account (account.id)}
-										<tr class="account-row">
-											<td></td>
-											<td class="account-path">{account.path}</td>
-											<td class="amount">{formatCurrencyPrecise(account.total)}</td>
-										</tr>
-									{/each}
-								{/if}
-							{/each}
-							<tr class="total-row">
-								<td></td>
-								<td><strong>Total {section.schedule === 'Schedule A' ? 'Deductions' : 'Expenses'}</strong></td>
-								<td class="amount"><strong>{formatCurrencyPrecise(section.totalExpenses)}</strong></td>
-							</tr>
-						</tbody>
-					</table>
-				</div>
+				{@render categoryTable(
+					section,
+					section.expenseCategories,
+					"exp",
+					section.schedule === "Schedule A" ? "Deductions" : "Expenses",
+					section.totalExpenses,
+					section.reportedExpenses
+				)}
 			{/if}
 
 			<!-- Net for this section (if both income and expenses exist) -->
 			{#if section.incomeCategories.length > 0 && section.expenseCategories.length > 0}
 				<div class="section-net">
 					<span>Net {section.schedule === 'Schedule C' ? 'Profit' : 'Amount'}</span>
-					<span class="net-amount" class:positive={section.netAmount >= 0} class:negative={section.netAmount < 0}>
-						{formatCurrencyPrecise(section.netAmount)}
+					<span class="net-amount" class:positive={section.reportedNet >= 0} class:negative={section.reportedNet < 0}>
+						{formatCurrencyPrecise(section.reportedNet)}
 					</span>
 				</div>
 			{/if}
@@ -398,6 +434,18 @@
 		cursor: pointer;
 	}
 
+	.info-banner {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-sm);
+		padding: var(--spacing-md);
+		background: var(--color-info-light);
+		border: 1px solid var(--color-info);
+		border-radius: var(--radius-md);
+		margin-bottom: var(--spacing-lg);
+		color: var(--color-text);
+	}
+
 	.warning-banner {
 		display: flex;
 		align-items: center;
@@ -522,6 +570,26 @@
 
 	.total-row {
 		background: var(--color-bg-alt);
+	}
+
+	.superseded {
+		color: var(--color-text-light);
+		text-decoration: line-through;
+	}
+
+	.variance.nonzero {
+		color: var(--color-danger);
+	}
+
+	.document-line a {
+		color: var(--color-primary);
+		text-decoration: none;
+	}
+
+	.box-label {
+		margin-left: var(--spacing-xs);
+		font-size: 12px;
+		color: var(--color-text-muted);
 	}
 
 	.section-net {

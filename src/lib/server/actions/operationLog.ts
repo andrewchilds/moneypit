@@ -8,7 +8,10 @@ export type EntityType =
 	| 'Rule'
 	| 'TaxCategory'
 	| 'BalanceRecord'
-	| 'DismissedDuplicate';
+	| 'DismissedDuplicate'
+	| 'TaxDocument'
+	| 'TaxDocumentLine'
+	| 'TaxFact';
 
 export interface Change {
 	entityType: EntityType;
@@ -124,6 +127,15 @@ async function entityExists(
 		case 'DismissedDuplicate':
 			count = await tx.dismissedDuplicate.count({ where: { id } });
 			break;
+		case 'TaxDocument':
+			count = await tx.taxDocument.count({ where: { id } });
+			break;
+		case 'TaxDocumentLine':
+			count = await tx.taxDocumentLine.count({ where: { id } });
+			break;
+		case 'TaxFact':
+			count = await tx.taxFact.count({ where: { id } });
+			break;
 	}
 	return count > 0;
 }
@@ -151,6 +163,15 @@ async function deleteEntity(
 			break;
 		case 'DismissedDuplicate':
 			await tx.dismissedDuplicate.delete({ where: { id } });
+			break;
+		case 'TaxDocument':
+			await tx.taxDocument.delete({ where: { id } });
+			break;
+		case 'TaxDocumentLine':
+			await tx.taxDocumentLine.delete({ where: { id } });
+			break;
+		case 'TaxFact':
+			await tx.taxFact.delete({ where: { id } });
 			break;
 	}
 }
@@ -203,6 +224,19 @@ async function recreateEntity(
 			await tx.dismissedDuplicate.create({
 				data: cleanData as Prisma.DismissedDuplicateUncheckedCreateInput
 			});
+			break;
+		case 'TaxDocument':
+			delete cleanData.lines;
+			delete cleanData.account;
+			await tx.taxDocument.create({ data: cleanData as Prisma.TaxDocumentUncheckedCreateInput });
+			break;
+		case 'TaxDocumentLine':
+			delete cleanData.document;
+			delete cleanData.taxCategory;
+			await tx.taxDocumentLine.create({ data: cleanData as Prisma.TaxDocumentLineUncheckedCreateInput });
+			break;
+		case 'TaxFact':
+			await tx.taxFact.create({ data: cleanData as Prisma.TaxFactUncheckedCreateInput });
 			break;
 	}
 }
@@ -271,6 +305,19 @@ async function updateEntity(
 				where: { id },
 				data: cleanData as Prisma.DismissedDuplicateUncheckedUpdateInput
 			});
+			break;
+		case 'TaxDocument':
+			delete cleanData.lines;
+			delete cleanData.account;
+			await tx.taxDocument.update({ where: { id }, data: cleanData as Prisma.TaxDocumentUncheckedUpdateInput });
+			break;
+		case 'TaxDocumentLine':
+			delete cleanData.document;
+			delete cleanData.taxCategory;
+			await tx.taxDocumentLine.update({ where: { id }, data: cleanData as Prisma.TaxDocumentLineUncheckedUpdateInput });
+			break;
+		case 'TaxFact':
+			await tx.taxFact.update({ where: { id }, data: cleanData as Prisma.TaxFactUncheckedUpdateInput });
 			break;
 	}
 }

@@ -43,6 +43,8 @@ model Book {
   taxModules    BookTaxModule[]
   rules         Rule[]
   operationLogs OperationLog[]
+  taxDocuments  TaxDocument[]
+  taxFacts      TaxFact[]
 }
 
 model Account {
@@ -66,6 +68,7 @@ model Account {
   creditTransactions Transaction[] @relation("CreditAccount")
   rules              Rule[]
   balanceRecords     BalanceRecord[]
+  taxDocuments       TaxDocument[]
 }
 
 model BalanceRecord {
@@ -137,7 +140,67 @@ model TaxCategory {
 
   @@index([bookId])
 
-  accounts    Account[]
+  accounts      Account[]
+  documentLines TaxDocumentLine[]
+}
+
+enum TaxDocumentStatus {
+  RECEIVED        // Form is in hand; its lines are authoritative figures
+  NOT_APPLICABLE  // Expected form will not arrive (no activity, etc.)
+}
+
+// A tax form received for a year: W-2, 1099-INT, 1098, 1095-A, etc.
+// Its lines are the authoritative figures for the tax categories they map to.
+model TaxDocument {
+  id        String            @id @default(cuid())
+  bookId    String
+  book      Book              @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  year      Int
+  formType  String            // "1098", "1099-B", "W-2"
+  issuer    String            // Institution or employer that issued it
+  status    TaxDocumentStatus @default(RECEIVED)
+  accountId String?           // Account the form reports on, if any
+  account   Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  notes     String?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  lines TaxDocumentLine[]
+
+  @@index([bookId, year])
+}
+
+model TaxDocumentLine {
+  id            String       @id @default(cuid())
+  documentId    String
+  document      TaxDocument  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  box           String       // "1", "1a", "10"
+  label         String
+  amount        Decimal      @db.Decimal(12, 2)
+  taxCategoryId String?
+  taxCategory   TaxCategory? @relation(fields: [taxCategoryId], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
+
+  @@index([documentId])
+  @@index([taxCategoryId])
+}
+
+// A fact about a tax year that doesn't map to a transaction: filing status,
+// whether an extension was filed, Roth basis, property use. Keys come from
+// the questions declared by enabled tax modules, but any key is allowed.
+// year is null for facts that carry forward across years.
+model TaxFact {
+  id        String   @id @default(cuid())
+  bookId    String
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  year      Int?
+  key       String
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([bookId, year, key])
+  @@index([bookId])
 }
 
 model BookTaxModule {

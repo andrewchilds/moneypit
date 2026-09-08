@@ -31,8 +31,8 @@ CONFIG
 ACCOUNTS
   account:list [--type <type>] [--prefix <path>] [--condensed]
   account:get <id>
-  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>]
-  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>]
+  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>]
+  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>]
   account:delete <id>
   account:tree [--type <type>]
 
@@ -62,6 +62,29 @@ TAX MODULES
   module:enable <id>      Enable a module (seeds its categories)
   module:disable <id>     Disable a module (deletes unused categories)
 
+TAX YEAR (questions, documents, and figures that don't map to transactions)
+  tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
+  tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
+  fact:list [--year <year>]             Questions from enabled modules with their answers
+  fact:set <key> <value> [--year <year>] [--carry-forward]
+  fact:get <key> [--year <year>]
+  fact:delete <key> [--year <year>] [--carry-forward]
+
+TAX DOCUMENTS (W-2, 1099s, 1098, 1095-A, ...)
+  doc:list [--year <year>] [--condensed]
+  doc:get <id>
+  doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--notes <text>] [--na]
+  doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--notes <text>] [--status received|na]
+  doc:delete <id>
+  doc:line <doc-id> --box <box> --amount <amount> [--label <text>] [--category <id|name>] [--no-category]
+  doc:line-delete <line-id>
+  doc:forms                             Known form types and their boxes
+
+  --year defaults to the most recently completed calendar year.
+  Document lines mapped to a tax category override the book total for that
+  category in the tax report. Boxes listed by doc:forms get a label and a
+  category automatically; --category overrides, --no-category leaves it unmapped.
+
 RULES
   rule:list [--condensed]
   rule:get <id>
@@ -89,6 +112,9 @@ OPERATION LOG
 
 ACCOUNT TYPES
   asset, liability, equity, income, expense
+
+ASSET TYPES
+  liquid, brokerage, roth_retirement, tax_deferred
 
 TRANSACTION STATUS
   pending, categorized

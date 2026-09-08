@@ -34,5 +34,76 @@ export const usScheduleC: TaxModule = {
 		{ name: 'Wages', scheduleRef: 'Schedule C Line 26', description: 'Wages paid to employees' },
 		{ name: 'Home Office', scheduleRef: 'Schedule C Line 30', description: 'Business use of home expenses' },
 		{ name: 'Other Expenses', scheduleRef: 'Schedule C Line 27', description: 'Other business expenses' },
+	],
+	questions: [
+		{
+			key: 'business_owner',
+			prompt: 'Whose business is this Schedule C for?',
+			type: 'choice',
+			carryForward: true,
+			options: [
+				{ value: 'taxpayer', label: 'Taxpayer' },
+				{ value: 'spouse', label: 'Spouse' }
+			]
+		},
+		{
+			key: 'business_description',
+			prompt: 'Principal business or profession (Schedule C Line A)',
+			type: 'text',
+			carryForward: true
+		},
+		{
+			key: 'business_code',
+			prompt: 'Principal business code (Schedule C Line B)',
+			type: 'text',
+			carryForward: true
+		},
+		{
+			key: 'accounting_method',
+			prompt: 'Accounting method',
+			type: 'choice',
+			carryForward: true,
+			options: [
+				{ value: 'cash', label: 'Cash' },
+				{ value: 'accrual', label: 'Accrual' }
+			]
+		},
+		{
+			key: 'received_1099_nec',
+			prompt: 'Did any client issue a 1099-NEC for this year?',
+			type: 'boolean'
+		},
+		{
+			key: 'received_1099_k',
+			prompt: 'Did a payment processor (Stripe, PayPal, etc.) issue a 1099-K?',
+			type: 'boolean'
+		},
+		{
+			key: 'home_office',
+			prompt: 'Was part of the home used regularly and exclusively for business?',
+			type: 'boolean'
+		},
+		{
+			key: 'home_office_sqft',
+			prompt: 'Home office square footage',
+			type: 'number',
+			dependsOn: { key: 'home_office', value: true }
+		},
+		{
+			key: 'home_total_sqft',
+			prompt: 'Total home square footage',
+			type: 'number',
+			dependsOn: { key: 'home_office', value: true }
+		},
+		{
+			key: 'sep_contribution',
+			prompt: 'SEP or solo 401(k) employer contribution for this year',
+			type: 'amount',
+			description: 'Can be made up to the filing deadline including extensions'
+		}
+	],
+	expectedDocuments: [
+		{ formType: '1099-NEC', whenFact: { key: 'received_1099_nec', value: true }, reason: 'Client reported nonemployee compensation' },
+		{ formType: '1099-K', whenFact: { key: 'received_1099_k', value: true }, reason: 'Payment processor reported card receipts' }
 	]
 };

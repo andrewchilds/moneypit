@@ -1,5 +1,5 @@
 #!/usr/bin/env npx tsx
-import { AccountType } from "@prisma/client";
+import { AccountType, AssetType } from "@prisma/client";
 import * as accounts from "../src/lib/server/actions/accounts";
 import * as transactions from "../src/lib/server/actions/transactions";
 import * as taxCategories from "../src/lib/server/actions/taxCategories";
@@ -10,10 +10,15 @@ import * as balanceRecords from "../src/lib/server/actions/balanceRecords";
 import * as operationLog from "../src/lib/server/actions/operationLog";
 import * as books from "../src/lib/server/actions/books";
 import * as bookTransfer from "../src/lib/server/actions/bookTransfer";
+import * as taxDocuments from "../src/lib/server/actions/taxDocuments";
+import * as taxFacts from "../src/lib/server/actions/taxFacts";
+import * as taxYear from "../src/lib/server/actions/taxYear";
+import { getTaxReportData } from "../src/lib/server/actions/reports";
+import { FORM_PRESETS } from "../src/lib/taxForms";
 import { readConfig, writeConfig, getConfigPath, updateConfig } from "../src/lib/server/config";
 import * as fs from "fs";
 import { CLI_HELP } from "../src/lib/cli-help";
-import { getAllModules, getModule } from "../src/lib/server/taxModules";
+import { getAllModules, getModule, findQuestion } from "../src/lib/server/taxModules";
 
 const args = process.argv.slice(2);
 
@@ -97,6 +102,35 @@ function printCondensedTransactions(txs: TransactionLike[]): void {
 		const debit = tx.debitAccount?.path ?? "(pending)";
 		console.log(`${tx.id}\t${date}\t${tx.description}\t$${amount}\t${credit}\t${debit}`);
 	}
+}
+
+function parseAssetType(type: string): AssetType | null {
+	if (type === "null" || type === "none") return null;
+	const upper = type.toUpperCase().replace(/-/g, "_") as AssetType;
+	if (!["LIQUID", "BROKERAGE", "ROTH_RETIREMENT", "TAX_DEFERRED"].includes(upper)) {
+		throw new Error(`Invalid asset type: ${type} (liquid, brokerage, roth_retirement, tax_deferred)`);
+	}
+	return upper;
+}
+
+/** Tax-year commands default to the most recently completed year. */
+function resolveYear(opts: Record<string, string | boolean>): number {
+	if (opts.year) {
+		const year = parseInt(opts.year as string, 10);
+		if (Number.isNaN(year)) throw new Error(`Invalid year: ${opts.year}`);
+		return year;
+	}
+	return new Date().getFullYear() - 1;
+}
+
+function money(n: number): string {
+	return `$${n.toFixed(2)}`;
+}
+
+function formatFactValue(value: unknown): string {
+	if (typeof value === "boolean") return value ? "yes" : "no";
+	if (typeof value === "number") return String(value);
+	return String(value);
 }
 
 function parseAccountType(type: string): AccountType {
@@ -205,10 +239,11 @@ async function main() {
 			const bookId = await resolveBookId(opts);
 			const type = opts.type as string;
 			const path = opts.path as string;
-			if (!type || !path) throw new Error("Usage: account:create --type <type> --path <path> [--last4 <digits>]");
+			if (!type || !path) throw new Error("Usage: account:create --type <type> --path <path> [--last4 <digits>] [--asset-type <type>]");
 			const account = await accounts.createAccount(bookId, parseAccountType(type), path, {
 				taxCategoryId: opts["tax-category"] as string | undefined,
-				last4: opts["last4"] as string | undefined
+				last4: opts["last4"] as string | undefined,
+				assetType: opts["asset-type"] ? (parseAssetType(opts["asset-type"] as string) ?? undefined) : undefined
 			});
 			json(account);
 			break;
@@ -225,8 +260,10 @@ async function main() {
 				taxCategoryId?: string | null;
 				openingBalance?: number | null;
 				last4?: string | null;
+				assetType?: AssetType | null;
 			} = {};
 			if (opts.path) data.path = opts.path as string;
+			if (opts["asset-type"] !== undefined) data.assetType = parseAssetType(opts["asset-type"] as string);
 			if (opts["tax-category"] !== undefined) {
 				data.taxCategoryId = opts["tax-category"] === "null" ? null : (opts["tax-category"] as string);
 			}
@@ -448,6 +485,211 @@ async function main() {
 			console.log(`Deleted tax category ${id}`);
 			break;
 		}
+
+			// === TAX DOCUMENT COMMANDS ===
+			case "doc:list": {
+				const bookId = await resolveBookId(opts);
+				const year = opts.year ? resolveYear(opts) : undefined;
+				const docs = await taxDocuments.listTaxDocuments(bookId, year);
+				if (opts.condensed) {
+					for (const doc of docs) {
+						const total = doc.lines.reduce((sum, l) => sum + Number(l.amount), 0);
+						console.log(
+							`${doc.id}\t${doc.year}\t${doc.formType}\t${doc.issuer}\t${doc.status}\t${doc.lines.length} line(s)\t${money(total)}`
+						);
+					}
+				} else {
+					json(docs);
+				}
+				break;
+			}
+
+			case "doc:get": {
+				const id = positional[0];
+				if (!id) throw new Error("Usage: doc:get <id>");
+				const doc = await taxDocuments.getTaxDocument(id);
+				if (!doc) throw new Error(`Document not found: ${id}`);
+				json(doc);
+				break;
+			}
+
+			case "doc:add": {
+				const bookId = await resolveBookId(opts);
+				const formType = opts.form as string;
+				const issuer = opts.issuer as string;
+				if (!formType || !issuer) {
+					throw new Error("Usage: doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--notes <text>] [--na]");
+				}
+				const doc = await taxDocuments.createTaxDocument(bookId, {
+					year: resolveYear(opts),
+					formType,
+					issuer,
+					accountId: opts.account as string | undefined,
+					notes: opts.notes as string | undefined,
+					status: opts.na ? "NOT_APPLICABLE" : "RECEIVED"
+				});
+				json(doc);
+				break;
+			}
+
+			case "doc:update": {
+				const id = positional[0];
+				if (!id) throw new Error("Usage: doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--notes <text>] [--status received|na]");
+				const data: taxDocuments.UpdateTaxDocumentData = {};
+				if (opts.issuer) data.issuer = opts.issuer as string;
+				if (opts.form) data.formType = opts.form as string;
+				if (opts.account !== undefined) data.accountId = opts.account === "null" ? null : (opts.account as string);
+				if (opts.notes !== undefined) data.notes = opts.notes === "null" ? null : (opts.notes as string);
+				if (opts.status) {
+					const status = (opts.status as string).toLowerCase();
+					data.status = status === "na" || status === "not_applicable" ? "NOT_APPLICABLE" : "RECEIVED";
+				}
+				json(await taxDocuments.updateTaxDocument(id, data));
+				break;
+			}
+
+			case "doc:delete": {
+				const id = positional[0];
+				if (!id) throw new Error("Usage: doc:delete <id>");
+				await taxDocuments.deleteTaxDocument(id);
+				console.log(`Deleted document ${id}`);
+				break;
+			}
+
+			case "doc:line": {
+				const id = positional[0];
+				const box = opts.box as string;
+				const amount = opts.amount as string;
+				if (!id || !box || amount === undefined) {
+					throw new Error("Usage: doc:line <doc-id> --box <box> --amount <amount> [--label <text>] [--category <id|name>] [--no-category]");
+				}
+				const line = await taxDocuments.addDocumentLine(id, {
+					box,
+					amount: parseFloat(amount),
+					label: opts.label as string | undefined,
+					category: opts["no-category"] ? null : (opts.category as string | undefined)
+				});
+				json(line);
+				break;
+			}
+
+			case "doc:line-delete": {
+				const id = positional[0];
+				if (!id) throw new Error("Usage: doc:line-delete <line-id>");
+				await taxDocuments.deleteDocumentLine(id);
+				console.log(`Deleted line ${id}`);
+				break;
+			}
+
+			case "doc:forms": {
+				for (const [formType, preset] of Object.entries(FORM_PRESETS)) {
+					console.log(`${formType}  ${preset.name}`);
+					for (const box of preset.boxes) {
+						console.log(`    ${box.box.padEnd(4)} ${box.label}`);
+					}
+				}
+				break;
+			}
+
+			// === TAX FACT COMMANDS ===
+			case "fact:list": {
+				const bookId = await resolveBookId(opts);
+				const year = resolveYear(opts);
+				const status = await taxYear.getTaxYearStatus(bookId, year);
+				console.log(`Tax year ${year}`);
+				const seen = new Set<string>();
+				for (const module of status.modules) {
+					console.log(`\n${module.name}`);
+					for (const q of module.questions) {
+						seen.add(q.key);
+						if (!q.visible) continue;
+						const answer = q.answered
+							? `= ${formatFactValue(q.answer)}${q.answerYear === null ? " (carry-forward)" : ""}`
+							: "(unanswered)";
+						console.log(`  ${q.key.padEnd(28)} ${q.prompt}  ${answer}`);
+					}
+				}
+				const facts = await taxFacts.listTaxFacts(bookId, year);
+				const other = facts.filter((f) => !seen.has(f.key));
+				if (other.length > 0) {
+					console.log("\nOther facts");
+					for (const f of other) {
+						console.log(`  ${f.key.padEnd(28)} = ${formatFactValue(f.value)}${f.year === null ? " (carry-forward)" : ""}`);
+					}
+				}
+				break;
+			}
+
+			case "fact:get": {
+				const bookId = await resolveBookId(opts);
+				const key = positional[0];
+				if (!key) throw new Error("Usage: fact:get <key> [--year <year>]");
+				const fact = await taxFacts.getTaxFact(bookId, resolveYear(opts), key);
+				if (!fact) throw new Error(`Fact not set: ${key}`);
+				json(fact);
+				break;
+			}
+
+			case "fact:set": {
+				const bookId = await resolveBookId(opts);
+				const key = positional[0];
+				const raw = positional.slice(1).join(" ");
+				if (!key || raw === "") throw new Error("Usage: fact:set <key> <value> [--year <year>] [--carry-forward]");
+				const question = findQuestion(key)?.question;
+				const value = taxFacts.parseFactValue(raw, question?.type, question?.options);
+				const year = opts["carry-forward"] ? null : resolveYear(opts);
+				const fact = await taxFacts.setTaxFact(bookId, key, value, year);
+				console.log(`Set ${key} = ${formatFactValue(fact.value)}${fact.year === null ? " (carry-forward)" : ` for ${fact.year}`}`);
+				break;
+			}
+
+			case "fact:delete": {
+				const bookId = await resolveBookId(opts);
+				const key = positional[0];
+				if (!key) throw new Error("Usage: fact:delete <key> [--year <year>] [--carry-forward]");
+				await taxFacts.deleteTaxFact(bookId, key, opts["carry-forward"] ? null : resolveYear(opts));
+				console.log(`Deleted fact ${key}`);
+				break;
+			}
+
+			// === TAX YEAR COMMANDS ===
+			case "tax:status": {
+				const bookId = await resolveBookId(opts);
+				const year = resolveYear(opts);
+				const status = await taxYear.getTaxYearStatus(bookId, year);
+				if (opts.json) {
+					json(status);
+					break;
+				}
+				console.log(`Tax year ${year}`);
+				console.log(`\nOpen questions: ${status.openQuestions}`);
+				for (const module of status.modules) {
+					for (const q of module.questions) {
+						if (q.visible && !q.answered) console.log(`  [${module.moduleId}] ${q.key}: ${q.prompt}`);
+					}
+				}
+				const received = status.expectedDocuments.filter((d) => d.status === "received").length;
+				const na = status.expectedDocuments.filter((d) => d.status === "not_applicable").length;
+				console.log(
+					`\nExpected documents: ${status.expectedDocuments.length} (${received} received, ${na} n/a, ${status.missingDocuments} missing)`
+				);
+				for (const d of status.expectedDocuments) {
+					const label = d.status === "received" ? "RECEIVED" : d.status === "not_applicable" ? "N/A     " : "MISSING ";
+					console.log(`  ${label}  ${d.formType.padEnd(9)} ${(d.institution || "-").padEnd(20)} ${d.reason}`);
+				}
+				console.log(`\nDocuments on hand: ${status.documents.length}`);
+				for (const doc of status.documents) {
+					const total = doc.lines.reduce((sum, l) => sum + Number(l.amount), 0);
+					console.log(`  ${doc.id}  ${doc.formType.padEnd(9)} ${doc.issuer.padEnd(20)} ${doc.status}  ${doc.lines.length} line(s)  ${money(total)}`);
+				}
+				break;
+			}
+
+			case "tax:report": {
+				const bookId = await resolveBookId(opts);
+				json(await getTaxReportData(bookId, resolveYear(opts)));
+				break;
+			}
 
 		// === RULE COMMANDS ===
 		case "rule:list": {
@@ -806,6 +1048,8 @@ async function main() {
 			console.log(`  Tax Categories: ${result.taxCategories}`);
 			console.log(`  Balance Records: ${result.balanceRecords}`);
 			console.log(`  Enabled Modules: ${result.enabledModules}`);
+			console.log(`  Tax Documents: ${result.taxDocuments}`);
+			console.log(`  Tax Facts: ${result.taxFacts}`);
 			break;
 		}
 
@@ -825,7 +1069,7 @@ async function main() {
 						console.log(`  ${m.id}`);
 						console.log(`    ${m.name}`);
 						console.log(`    ${m.description}`);
-						console.log(`    Categories: ${m.categories.length}`);
+						console.log(`    Categories: ${m.categories.length}, Questions: ${m.questions?.length ?? 0}`);
 					}
 				}
 			}

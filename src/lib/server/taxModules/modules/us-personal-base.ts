@@ -23,5 +23,74 @@ export const usPersonalBase: TaxModule = {
 		// Non-deductible
 		{ name: 'Not Deductible', scheduleRef: 'N/A', description: 'Personal expenses - not tax deductible' },
 		{ name: 'Tax Exempt', scheduleRef: 'N/A', description: 'Tax-exempt income (municipal bonds, etc.)' },
+	],
+	questions: [
+		{
+			key: 'filing_status',
+			prompt: 'Filing status',
+			type: 'choice',
+			options: [
+				{ value: 'single', label: 'Single' },
+				{ value: 'mfj', label: 'Married filing jointly' },
+				{ value: 'mfs', label: 'Married filing separately' },
+				{ value: 'hoh', label: 'Head of household' },
+				{ value: 'qss', label: 'Qualifying surviving spouse' }
+			]
+		},
+		{ key: 'dependents', prompt: 'Number of dependents claimed', type: 'number' },
+		{
+			key: 'extension_filed',
+			prompt: 'Was a federal extension (Form 4868) filed?',
+			type: 'boolean'
+		},
+		{
+			key: 'extension_payment',
+			prompt: 'Amount paid with the federal extension',
+			type: 'amount',
+			dependsOn: { key: 'extension_filed', value: true }
+		},
+		{
+			key: 'federal_estimated_payments',
+			prompt: 'Federal estimated tax payments made for this year (total)',
+			type: 'amount',
+			description: 'Include payments made from accounts not tracked in this book'
+		},
+		{
+			key: 'w2_wages',
+			prompt: 'Did you or your spouse receive W-2 wages?',
+			type: 'boolean'
+		},
+		{
+			key: 'marketplace_coverage',
+			prompt: 'Was health insurance bought through a state or federal marketplace?',
+			type: 'boolean',
+			description: 'Marketplace plans issue Form 1095-A, and any advance premium credit must be reconciled on Form 8962'
+		},
+		{
+			key: 'owned_property_use',
+			prompt: 'How is any real estate you own used?',
+			type: 'choice',
+			options: [
+				{ value: 'none', label: 'No real estate owned' },
+				{ value: 'primary', label: 'Primary residence' },
+				{ value: 'second_home', label: 'Second home (not rented)' },
+				{ value: 'rental', label: 'Rented to others (Schedule E)' }
+			]
+		},
+		{
+			key: 'roth_basis',
+			prompt: 'Total Roth IRA contributions to date (basis)',
+			type: 'amount',
+			carryForward: true,
+			description: 'Needed on Form 8606 for any Roth withdrawal before age 59½'
+		}
+	],
+	expectedDocuments: [
+		{ formType: 'W-2', whenFact: { key: 'w2_wages', value: true }, reason: 'W-2 wages reported' },
+		{
+			formType: '1095-A',
+			whenFact: { key: 'marketplace_coverage', value: true },
+			reason: 'Marketplace health coverage'
+		}
 	]
 };
