@@ -20,7 +20,7 @@ export interface CSVMapping {
 	filters?: CSVFilter[];
 }
 
-function parseDate(dateStr: string, format: string): Date {
+export function parseDate(dateStr: string, format: string): Date {
 	const str = dateStr.trim();
 
 	if (format === 'MM/DD/YYYY') {
@@ -106,7 +106,7 @@ export function detectDateFormat(samples: string[]): string | null {
 	return null;
 }
 
-function parseAmount(value: string): number {
+export function parseAmount(value: string): number {
 	if (!value || value.trim() === '') return 0;
 	// Remove currency symbols, commas, and whitespace
 	const cleaned = value.replace(/[$,\s]/g, '').trim();

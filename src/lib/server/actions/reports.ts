@@ -296,6 +296,125 @@ export interface ExpensesReportData {
  * Get expenses report data for a given date range.
  * Groups expenses by top-level category with drill-down support.
  */
+/**
+ * Group per-account monthly totals by top-level category, one entry per month
+ * with segments sorted by value descending. Months are sorted ascending.
+ */
+export function buildMonthlyData(
+	monthlyTotals: { accountId: string; month: string; total: number }[],
+	accountPaths: Map<string, string>
+): MonthlyStackedData[] {
+	const monthCategoryTotals = new Map<string, Map<string, number>>();
+	const allMonths = new Set<string>();
+	const allTopLevelCategories = new Set<string>();
+
+	for (const row of monthlyTotals) {
+		const path = accountPaths.get(row.accountId);
+		if (!path) continue;
+
+		// Top-level category is the first segment of the path
+		const topLevel = path.split(':')[0];
+		allMonths.add(row.month);
+		allTopLevelCategories.add(topLevel);
+
+		if (!monthCategoryTotals.has(row.month)) {
+			monthCategoryTotals.set(row.month, new Map());
+		}
+		const categoryMap = monthCategoryTotals.get(row.month)!;
+		categoryMap.set(topLevel, (categoryMap.get(topLevel) || 0) + Number(row.total));
+	}
+
+	const sortedMonths = Array.from(allMonths).sort();
+
+	return sortedMonths.map(month => {
+		const categoryMap = monthCategoryTotals.get(month) || new Map();
+		const segments: StackedBarSegment[] = [];
+		let total = 0;
+
+		for (const category of allTopLevelCategories) {
+			const value = categoryMap.get(category) || 0;
+			if (value > 0) {
+				segments.push({ label: category, value });
+				total += value;
+			}
+		}
+
+		segments.sort((a, b) => b.value - a.value);
+		return { month, segments, total };
+	});
+}
+
+/**
+ * Build a category tree from a flat account list. Intermediate path segments
+ * that aren't accounts become virtual nodes; totals roll up to ancestors and
+ * each level is sorted by total descending.
+ */
+export function buildCategoryTree(
+	accounts: { id: string; path: string }[],
+	accountTotals: Map<string, number>
+): ExpenseCategoryNode[] {
+	const root: ExpenseCategoryNode[] = [];
+	const nodeMap = new Map<string, ExpenseCategoryNode>();
+
+	// Sort accounts by path for consistent ordering
+	const sortedAccounts = [...accounts].sort((a, b) => a.path.localeCompare(b.path));
+
+	for (const account of sortedAccounts) {
+		const total = accountTotals.get(account.id) || 0;
+		const parts = account.path.split(':');
+
+		let currentPath = '';
+		let parentChildren = root;
+
+		for (let i = 0; i < parts.length; i++) {
+			const part = parts[i];
+			currentPath = currentPath ? `${currentPath}:${part}` : part;
+			const isLeaf = i === parts.length - 1;
+
+			let node = nodeMap.get(currentPath);
+			if (!node) {
+				node = {
+					id: isLeaf ? account.id : `virtual:${currentPath}`,
+					path: currentPath,
+					name: part,
+					total: 0,
+					children: []
+				};
+				nodeMap.set(currentPath, node);
+				parentChildren.push(node);
+			}
+
+			// Add total to this node and all ancestors
+			if (isLeaf) {
+				node.total += total;
+				let parentPath = parts.slice(0, i).join(':');
+				while (parentPath) {
+					const parentNode = nodeMap.get(parentPath);
+					if (parentNode) {
+						parentNode.total += total;
+					}
+					const parentParts = parentPath.split(':');
+					parentParts.pop();
+					parentPath = parentParts.join(':');
+				}
+			}
+
+			parentChildren = node.children;
+		}
+	}
+
+	// Sort each level by total descending
+	function sortChildren(nodes: ExpenseCategoryNode[]) {
+		nodes.sort((a, b) => b.total - a.total);
+		for (const node of nodes) {
+			sortChildren(node.children);
+		}
+	}
+	sortChildren(root);
+
+	return root;
+}
+
 export async function getExpensesReportData(
 	bookId: string,
 	from: Date,
@@ -337,65 +456,10 @@ export async function getExpensesReportData(
 		ORDER BY month ASC
 	`;
 
-	// Build accountId -> path map
 	const accountPathMap = new Map(accounts.map(a => [a.id, a.path]));
+	const monthlyData = buildMonthlyData(monthlyTotals, accountPathMap);
 
-	// Get all unique months in the range
-	const allMonths = new Set<string>();
-	for (const row of monthlyTotals) {
-		allMonths.add(row.month);
-	}
-	const sortedMonths = Array.from(allMonths).sort();
-
-	// Build monthly data grouped by top-level category
-	// First, collect totals per top-level category per month
-	const monthCategoryTotals = new Map<string, Map<string, number>>();
-
-	for (const row of monthlyTotals) {
-		const path = accountPathMap.get(row.accountId);
-		if (!path) continue;
-
-		// Get top-level category (first segment of path)
-		const topLevel = path.split(':')[0];
-		const total = Number(row.total);
-
-		if (!monthCategoryTotals.has(row.month)) {
-			monthCategoryTotals.set(row.month, new Map());
-		}
-		const categoryMap = monthCategoryTotals.get(row.month)!;
-		categoryMap.set(topLevel, (categoryMap.get(topLevel) || 0) + total);
-	}
-
-	// Collect all top-level categories
-	const allTopLevelCategories = new Set<string>();
-	for (const categoryMap of monthCategoryTotals.values()) {
-		for (const category of categoryMap.keys()) {
-			allTopLevelCategories.add(category);
-		}
-	}
-
-	// Build monthly stacked data
-	const monthlyData: MonthlyStackedData[] = sortedMonths.map(month => {
-		const categoryMap = monthCategoryTotals.get(month) || new Map();
-		const segments: StackedBarSegment[] = [];
-		let total = 0;
-
-		for (const category of allTopLevelCategories) {
-			const value = categoryMap.get(category) || 0;
-			if (value > 0) {
-				segments.push({ label: category, value });
-				total += value;
-			}
-		}
-
-		// Sort segments by value descending
-		segments.sort((a, b) => b.value - a.value);
-
-		return { month, segments, total };
-	});
-
-	// Build category tree with totals
-	// First, calculate total per account for the entire period
+	// Total per account for the entire period
 	const accountTotals = new Map<string, number>();
 	for (const row of monthlyTotals) {
 		accountTotals.set(
@@ -404,72 +468,7 @@ export async function getExpensesReportData(
 		);
 	}
 
-	// Build tree structure
-	function buildTree(): ExpenseCategoryNode[] {
-		const root: ExpenseCategoryNode[] = [];
-		const nodeMap = new Map<string, ExpenseCategoryNode>();
-
-		// Sort accounts by path for consistent ordering
-		const sortedAccounts = [...accounts].sort((a, b) => a.path.localeCompare(b.path));
-
-		for (const account of sortedAccounts) {
-			const total = accountTotals.get(account.id) || 0;
-			const parts = account.path.split(':');
-
-			let currentPath = '';
-			let parentChildren = root;
-
-			for (let i = 0; i < parts.length; i++) {
-				const part = parts[i];
-				currentPath = currentPath ? `${currentPath}:${part}` : part;
-				const isLeaf = i === parts.length - 1;
-
-				let node = nodeMap.get(currentPath);
-				if (!node) {
-					node = {
-						id: isLeaf ? account.id : `virtual:${currentPath}`,
-						path: currentPath,
-						name: part,
-						total: 0,
-						children: []
-					};
-					nodeMap.set(currentPath, node);
-					parentChildren.push(node);
-				}
-
-				// Add total to this node and all ancestors
-				if (isLeaf) {
-					node.total += total;
-					// Propagate total up to parents
-					let parentPath = parts.slice(0, i).join(':');
-					while (parentPath) {
-						const parentNode = nodeMap.get(parentPath);
-						if (parentNode) {
-							parentNode.total += total;
-						}
-						const parentParts = parentPath.split(':');
-						parentParts.pop();
-						parentPath = parentParts.join(':');
-					}
-				}
-
-				parentChildren = node.children;
-			}
-		}
-
-		// Sort each level by total descending
-		function sortChildren(nodes: ExpenseCategoryNode[]) {
-			nodes.sort((a, b) => b.total - a.total);
-			for (const node of nodes) {
-				sortChildren(node.children);
-			}
-		}
-		sortChildren(root);
-
-		return root;
-	}
-
-	const categoryTree = buildTree();
+	const categoryTree = buildCategoryTree(accounts, accountTotals);
 	const totalExpenses = categoryTree.reduce((sum, node) => sum + node.total, 0);
 
 	return {

@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-
-// From src/lib/utils/date.ts
-function parseLocalDate(dateStr: string): Date {
-	const [year, month, day] = dateStr.split('-').map(Number);
-	return new Date(year, month - 1, day);
-}
+import { parseLocalDate } from '$lib/utils/date';
 
 describe('parseLocalDate', () => {
 	it('parses YYYY-MM-DD as local date', () => {

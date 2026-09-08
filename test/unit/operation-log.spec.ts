@@ -1,35 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-
-// Extracted from src/lib/server/actions/operationLog.ts for unit testing
-function diff<T extends Record<string, unknown>>(
-	before: T,
-	after: T
-): { before: Partial<T>; after: Partial<T> } {
-	const beforeDiff: Partial<T> = {};
-	const afterDiff: Partial<T> = {};
-
-	const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
-	for (const key of allKeys) {
-		const k = key as keyof T;
-		if (JSON.stringify(before[k]) !== JSON.stringify(after[k])) {
-			beforeDiff[k] = before[k];
-			afterDiff[k] = after[k];
-		}
-	}
-
-	return { before: beforeDiff, after: afterDiff };
-}
-
-function serialize<T>(obj: T): Record<string, unknown> {
-	return JSON.parse(
-		JSON.stringify(obj, (_, value) => {
-			if (value instanceof Date) return value.toISOString();
-			if (typeof value === 'bigint') return value.toString();
-			if (value?.constructor?.name === 'Decimal') return value.toString();
-			return value;
-		})
-	);
-}
+import { diff, serialize } from '$lib/server/actions/operationLog';
 
 describe('diff', () => {
 	it('returns empty objects when no differences', () => {

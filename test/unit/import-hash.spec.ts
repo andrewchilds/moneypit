@@ -1,30 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { createHash } from 'crypto';
-
-// Extracted from src/lib/server/actions/import.ts for unit testing
-function generateImportHash(
-	date: Date,
-	amount: number,
-	description: string,
-	accountId: string,
-	seq: number = 0,
-	fitid?: string
-): string {
-	const data = fitid
-		? `fitid:${fitid}|${accountId}`
-		: `${date.toISOString().slice(0, 10)}|${amount.toFixed(2)}|${description}|${accountId}|${seq}`;
-	return createHash('sha256').update(data).digest('hex').slice(0, 32);
-}
-
-function generateLegacyImportHash(
-	date: Date,
-	amount: number,
-	description: string,
-	accountId: string
-): string {
-	const data = `${date.toISOString().slice(0, 10)}|${amount.toFixed(2)}|${description}|${accountId}`;
-	return createHash('sha256').update(data).digest('hex').slice(0, 32);
-}
+import { generateImportHash, generateLegacyImportHash } from '$lib/server/actions/import';
 
 describe('generateImportHash', () => {
 	const date = new Date(2026, 2, 15); // March 15, 2026

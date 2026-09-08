@@ -207,6 +207,27 @@ npm run lint     # ESLint
 npx prisma studio  # Database GUI
 ```
 
+### Driving the App in a Browser
+
+Unit and e2e tests cover the CLI, not the web UI. To look at actual pages (verify a UI change, read a report), drive the running dev server with `scripts/driver.py` and look at the screenshot or table output:
+
+```bash
+/Users/andrew/Projects/local-python-env/bin/python scripts/driver.py            # dashboard screenshot
+/Users/andrew/Projects/local-python-env/bin/python scripts/driver.py steps.txt  # run a step file
+```
+
+A step file is one command per line, e.g.:
+
+```
+goto /reports/tax?year=2025
+fullshot tax-2025
+table table
+goto /reports/expenses?range=custom&year=2025
+fullshot expenses-2025
+```
+
+Commands: `goto`, `click`, `fill`, `select`, `key`, `wait`, `shot`, `fullshot`, `text`, `table`, `box`, `eval`. See the module docstring for details. Screenshots go to `screenshots/` (gitignored). `table` prints every matching table as tab-separated text, which is the reliable way to read numbers off a report. Pass `--book <id>` to target a specific book; the dev server uses the real database, so use the Demo book for anything that mutates.
+
 ### Database Changes
 
 Use `db push` instead of migrations for schema changes:

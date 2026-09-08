@@ -29,3 +29,6 @@ vite.config.ts.timestamp-*
 
 # Backups
 /backups
+
+# Browser driver output
+/screenshots
