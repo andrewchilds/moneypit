@@ -1,5 +1,6 @@
 import { getAccountTree, createAccount, listAccounts, updateAccount } from '$lib/server/actions/accounts';
 import { listTaxCategories } from '$lib/server/actions/taxCategories';
+import { listBusinesses } from '$lib/server/actions/businesses';
 import { db } from '$lib/server/db';
 import type { AccountType, AssetType } from '@prisma/client';
 import { fail } from '@sveltejs/kit';
@@ -7,10 +8,11 @@ import { fail } from '@sveltejs/kit';
 export async function load({ locals }) {
 	const { bookId } = locals;
 
-	const [tree, accounts, taxCategories] = await Promise.all([
+	const [tree, accounts, taxCategories, businesses] = await Promise.all([
 		getAccountTree(bookId),
 		listAccounts(bookId),
-		listTaxCategories(bookId)
+		listTaxCategories(bookId),
+		listBusinesses(bookId)
 	]);
 
 	// Calculate balances for each account (opening balance + debits - credits)
@@ -61,7 +63,8 @@ export async function load({ locals }) {
 		ruleCounts: Object.fromEntries(ruleCountMap),
 		totals,
 		liquidAssets,
-		taxCategories
+		taxCategories,
+		businesses: businesses.map((b) => ({ id: b.id, name: b.name }))
 	};
 }
 
@@ -75,6 +78,7 @@ export const actions = {
 		const openingBalanceStr = data.get('openingBalance') as string | null;
 		const last4 = data.get('last4') as string | null;
 		const assetTypeStr = data.get('assetType') as string | null;
+		const businessId = data.get('businessId') as string | null;
 
 		if (!type || !path) {
 			return fail(400, { error: 'Type and path are required' });
@@ -88,7 +92,8 @@ export const actions = {
 				taxCategoryId: taxCategoryId || undefined,
 				openingBalance,
 				last4: last4 || undefined,
-				assetType
+				assetType,
+				businessId: businessId || undefined
 			});
 			return { success: true, account };
 		} catch (e) {

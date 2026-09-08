@@ -37,6 +37,7 @@
 	let newAccountType = $state("EXPENSE");
 	let newAccountPath = $state("");
 	let newTaxCategory = $state("");
+	let newBusinessId = $state("");
 	let newOpeningBalance = $state("");
 	let newLast4 = $state("");
 	let newAssetType = $state("");
@@ -114,6 +115,7 @@
 		showCreateModal = false;
 		newAccountPath = "";
 		newTaxCategory = "";
+		newBusinessId = "";
 		newOpeningBalance = "";
 		newLast4 = "";
 		newAssetType = "";
@@ -330,10 +332,12 @@
 			bind:type={newAccountType}
 			bind:path={newAccountPath}
 			bind:taxCategoryId={newTaxCategory}
+			bind:businessId={newBusinessId}
 			bind:openingBalance={newOpeningBalance}
 			bind:last4={newLast4}
 			bind:assetType={newAssetType}
 			taxCategories={data.taxCategories}
+			businesses={data.businesses}
 			error={form?.error}
 			submitLabel="Create"
 			oncancel={() => (showCreateModal = false)}

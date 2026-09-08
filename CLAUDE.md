@@ -138,8 +138,8 @@ DEMO
 ACCOUNTS
   account:list [--type <type>] [--prefix <path>] [--condensed]
   account:get <id>
-  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>]
-  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>]
+  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]
+  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]
   account:delete <id>
   account:tree [--type <type>]
 
@@ -169,22 +169,32 @@ TAX MODULES
   module:enable <id>      Enable a module (seeds its categories)
   module:disable <id>     Disable a module (deletes unused categories)
 
+BUSINESSES (one Schedule C each; accounts, answers, and documents belong to one)
+  business:list [--condensed]
+  business:get <id|name>
+  business:create <name>                First business adopts existing Schedule C accounts and answers
+  business:update <id|name> --name <name>
+  business:delete <id|name>             Unassigns its accounts and documents; deletes its answers
+  business:assign <id|name> <account-ids...>
+
 TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
   tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
   fact:list [--year <year>]             Questions from enabled modules with their answers
-  fact:set <key> <value> [--year <year>] [--carry-forward]
-  fact:get <key> [--year <year>]
-  fact:delete <key> [--year <year>] [--carry-forward]
+  fact:set <key> <value> [--year <year>] [--carry-forward] [--business <id|name>]
+  fact:get <key> [--year <year>] [--business <id|name>]
+  fact:delete <key> [--year <year>] [--carry-forward] [--business <id|name>]
 
 TAX DOCUMENTS (W-2, 1099s, 1098, 1095-A, ...)
   doc:list [--year <year>] [--condensed]
   doc:get <id>
-  doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--notes <text>] [--na]
-  doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--notes <text>] [--status received|na]
+  doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--business <id|name>] [--notes <text>] [--na]
+  doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--business <id|name>] [--notes <text>] [--status received|na]
   doc:delete <id>
   doc:line <doc-id> --box <box> --amount <amount> [--label <text>] [--category <id|name>] [--no-category]
   doc:line-delete <line-id>
+  doc:attach <doc-id> <file>            Attach the form itself (PDF, PNG, JPEG, WebP)
+  doc:detach <doc-id>                   Remove the attached file
   doc:forms                             Known form types and their boxes
 
 RULES
@@ -234,11 +244,39 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   shows it beside the book total with the variance, and uses it in totals.
   Categories with document figures but no accounts (1099-B capital gains) still
   appear. Lines on `NOT_APPLICABLE` documents are ignored.
+  The form itself (PDF or image) can be attached to a document
+  (`doc:attach`, or the drop area when adding one on `/tax/<year>`). It is
+  stored in the database, so backups and book exports carry it. Opening a
+  document at `/tax/documents/<id>` shows the file beside the form's boxes:
+  clicking a figure on the page (or dragging a box around one) fills the
+  armed box and remembers where on the page it came from, so each line can be
+  traced back to the form. Boxes can also be typed in there without a file.
 - **Expected documents** are inferred from the year's transactions (interest
   received implies a 1099-INT, brokerage withdrawals a 1099-B, retirement
   distributions a 1099-R, mortgage interest a 1098) and from answers
   (`expectedDocuments` in a module). Satisfy one by adding a document of that
   form type from the same institution, or mark it not applicable with `--na`.
+
+### Businesses
+
+A book can hold more than one sole proprietorship, each filing its own
+Schedule C. A **Business** is a named record the following attach to:
+
+- **Accounts** (`--business` on `account:create`/`account:update`, or
+  `business:assign`). The tax report shows one Schedule C section per
+  business, built from that business's accounts. Accounts with a Schedule C
+  category but no business land in a flagged "no business assigned" section.
+- **Tax facts** for modules marked `perBusiness` (`us-schedule-c`). Those
+  questions are asked once per business on `/tax/<year>`, and `fact:set`
+  needs `--business` for them once the book has any business.
+- **Tax documents** such as a 1099-NEC or 1099-K (`--business` on `doc:add`).
+  Their lines overlay only that business's section, and an expected document
+  raised by a per-business answer is satisfied only by a document filed under
+  the same business.
+
+A book with no businesses behaves as if it had exactly one. Creating the
+first business adopts the existing Schedule C accounts and answers, so
+nothing changes until a second business is added and accounts are moved.
 
 `--year` defaults to the most recently completed calendar year. Boxes listed by
 `doc:forms` get a label and a guessed category automatically; pass

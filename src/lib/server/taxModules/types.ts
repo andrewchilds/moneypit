@@ -39,4 +39,10 @@ export interface TaxModule {
 	categories: TaxModuleCategory[];
 	questions?: TaxQuestion[];
 	expectedDocuments?: FactExpectedDocument[];
+	/**
+	 * Ask this module's questions once per business in the book, and split
+	 * its categories in the tax report by the business each account belongs
+	 * to. A book with no businesses behaves as if it had exactly one.
+	 */
+	perBusiness?: boolean;
 }

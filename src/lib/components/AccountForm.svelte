@@ -16,7 +16,9 @@
 		openingBalance = $bindable(''),
 		last4 = $bindable(''),
 		assetType = $bindable(''),
+		businessId = $bindable(''),
 		taxCategories,
+		businesses = [],
 		error = null,
 		submitLabel = 'Save',
 		oncancel
@@ -27,7 +29,9 @@
 		openingBalance: string;
 		last4: string;
 		assetType: string;
+		businessId?: string;
 		taxCategories: TaxCategory[];
+		businesses?: { id: string; name: string }[];
 		error?: string | null;
 		submitLabel?: string;
 		oncancel: () => void;
@@ -51,6 +55,8 @@
 
 	const showAssetLiabilityFields = $derived(type === 'ASSET' || type === 'LIABILITY');
 	const showAssetType = $derived(type === 'ASSET');
+	const showBusiness = $derived(businesses.length > 0 && (type === 'INCOME' || type === 'EXPENSE'));
+	const businessOptions = $derived([{ value: '', label: 'None' }, ...businesses.map((b) => ({ value: b.id, label: b.name }))]);
 </script>
 
 <div class="form-group">
@@ -70,6 +76,15 @@
 	<TaxCategoryAutocomplete {taxCategories} bind:value={taxCategoryId} />
 	<input type="hidden" name="taxCategoryId" value={taxCategoryId} />
 </div>
+
+{#if showBusiness}
+	<div class="form-group">
+		<label for="business">Business</label>
+		<Dropdown options={businessOptions} bind:value={businessId} />
+		<input type="hidden" name="businessId" value={businessId} />
+		<small class="hint">Which Schedule C this account reports on</small>
+	</div>
+{/if}
 
 {#if showAssetLiabilityFields}
 	<div class="form-group">

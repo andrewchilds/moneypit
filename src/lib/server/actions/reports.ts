@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import type { AssetType, AccountType } from '@prisma/client';
 import { getDocumentTotalsByCategory, type DocumentLineRef } from './taxDocuments';
 import { getTaxYearStatus } from './taxYear';
+import { perBusinessSchedules, scheduleOf } from '../taxModules';
 
 export interface StackedBarSegment {
 	label: string;
@@ -236,6 +237,8 @@ export interface TaxCategoryTotal {
 	scheduleRef: string | null;
 	description: string | null;
 	accountType: AccountType;
+	/** Business this total belongs to on a per-business schedule; null when not split */
+	businessId: string | null;
 	/** Total per the books (transactions) */
 	total: number;
 	/** Total per received tax documents mapped to this category, if any */
@@ -251,8 +254,15 @@ export interface TaxCategoryTotal {
 }
 
 export interface ScheduleSection {
+	/** Unique within the report: schedule plus business */
+	key: string;
 	schedule: string; // "Schedule C", "Schedule A", "Form 1120", etc.
 	description: string; // Short description of the schedule
+	/** Business this section is for, on per-business schedules when the book has businesses */
+	businessId: string | null;
+	businessName: string | null;
+	/** True for a per-business schedule whose accounts have no business assigned */
+	unassigned: boolean;
 	incomeCategories: TaxCategoryTotal[];
 	expenseCategories: TaxCategoryTotal[];
 	totalIncome: number;
@@ -586,7 +596,29 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	// Categories that should be excluded from deductible totals
 	const nonDeductibleCategories = new Set(['Not Deductible', 'Tax Exempt']);
 
-	// Group by tax category
+	// Per-business schedules (Schedule C) are split by the business each
+	// account belongs to once the book has businesses. Scope is the business
+	// id, '' for accounts on such a schedule with no business, or null when
+	// the schedule isn't split.
+	const businesses = await db.business.findMany({ where: { bookId }, orderBy: { createdAt: 'asc' } });
+	const businessNames = new Map(businesses.map((b) => [b.id, b.name]));
+	const splitSchedules = businesses.length > 0 ? perBusinessSchedules() : new Set<string>();
+	const scopeFor = (scheduleRef: string | null, businessId: string | null): string | null => {
+		const schedule = scheduleOf(scheduleRef);
+		return schedule !== null && splitSchedules.has(schedule) ? (businessId ?? '') : null;
+	};
+	const scopeOfLine = (line: DocumentLineRef) => line.businessId ?? '';
+
+	// Document figures for a category within a scope
+	const documentsFor = (taxCategoryId: string, scope: string | null): { total: number; lines: DocumentLineRef[] } | null => {
+		const docs = documentTotals.get(taxCategoryId);
+		if (!docs) return null;
+		const lines = scope === null ? docs.lines : docs.lines.filter((l) => scopeOfLine(l) === scope);
+		if (lines.length === 0) return null;
+		return { total: lines.reduce((sum, l) => sum + l.amount, 0), lines };
+	};
+
+	// Group by tax category (and business on split schedules)
 	function groupByTaxCategory(
 		accountList: typeof accounts,
 		accountType: AccountType
@@ -595,35 +627,44 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		nonDeductible: TaxCategoryTotal[];
 		uncategorized: { id: string; path: string; total: number }[];
 	} {
-		const categoryMap = new Map<string | null, TaxCategoryTotal>();
+		const categoryMap = new Map<string, TaxCategoryTotal>();
 		const uncategorized: { id: string; path: string; total: number }[] = [];
 
-		for (const account of accountList) {
-			const total = totalMap.get(account.id) ?? 0;
-			if (total === 0) continue;
-
-			if (!account.taxCategoryId) {
-				uncategorized.push({ id: account.id, path: account.path, total });
-				continue;
-			}
-
-			const key = account.taxCategoryId;
-			if (!categoryMap.has(key)) {
-				categoryMap.set(key, {
-					taxCategoryId: account.taxCategoryId,
-					taxCategoryName: account.taxCategory?.name ?? 'Unknown',
-					scheduleRef: account.taxCategory?.scheduleRef ?? null,
-					description: account.taxCategory?.description ?? null,
+		const entryFor = (
+			category: { id: string; name: string; scheduleRef: string | null; description: string | null },
+			scope: string | null
+		): TaxCategoryTotal => {
+			const key = `${scope ?? '*'}|${category.id}`;
+			let entry = categoryMap.get(key);
+			if (!entry) {
+				entry = {
+					taxCategoryId: category.id,
+					taxCategoryName: category.name,
+					scheduleRef: category.scheduleRef,
+					description: category.description,
 					accountType,
+					businessId: scope === null ? null : scope || null,
 					total: 0,
 					documentTotal: null,
 					documentLines: [],
 					reportedTotal: 0,
 					accounts: []
-				});
+				};
+				categoryMap.set(key, entry);
+			}
+			return entry;
+		};
+
+		for (const account of accountList) {
+			const total = totalMap.get(account.id) ?? 0;
+			if (total === 0) continue;
+
+			if (!account.taxCategoryId || !account.taxCategory) {
+				uncategorized.push({ id: account.id, path: account.path, total });
+				continue;
 			}
 
-			const cat = categoryMap.get(key)!;
+			const cat = entryFor(account.taxCategory, scopeFor(account.taxCategory.scheduleRef, account.businessId));
 			cat.total += total;
 			cat.reportedTotal = cat.total;
 			cat.accounts.push({ id: account.id, path: account.path, total });
@@ -633,26 +674,18 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		// in the report: a 1099-B's capital gains have no book transactions.
 		const accountCategoryIds = new Set(accountList.map((a) => a.taxCategoryId));
 		for (const category of allCategories) {
-			if (!documentTotals.has(category.id) || categoryMap.has(category.id)) continue;
-			if (accountCategoryIds.has(category.id)) continue;
+			const docs = documentTotals.get(category.id);
+			if (!docs || accountCategoryIds.has(category.id)) continue;
 			if (classifyDocumentOnlyCategory(category.name, category.scheduleRef) !== accountType) continue;
-			categoryMap.set(category.id, {
-				taxCategoryId: category.id,
-				taxCategoryName: category.name,
-				scheduleRef: category.scheduleRef,
-				description: category.description,
-				accountType,
-				total: 0,
-				documentTotal: null,
-				documentLines: [],
-				reportedTotal: 0,
-				accounts: []
-			});
+			const split = scopeFor(category.scheduleRef, null) !== null;
+			const scopes = split ? new Set(docs.lines.map(scopeOfLine)) : new Set<string | null>([null]);
+			for (const scope of scopes) entryFor(category, scope);
 		}
 
 		// Overlay document figures
-		for (const cat of categoryMap.values()) {
-			const docs = cat.taxCategoryId ? documentTotals.get(cat.taxCategoryId) : undefined;
+		for (const [key, cat] of categoryMap) {
+			const scope = key.startsWith('*|') ? null : key.slice(0, key.indexOf('|'));
+			const docs = cat.taxCategoryId ? documentsFor(cat.taxCategoryId, scope) : null;
 			if (docs) {
 				cat.documentTotal = docs.total;
 				cat.documentLines = docs.lines;
@@ -688,14 +721,6 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	const incomeGrouped = groupByTaxCategory(incomeAccounts, 'INCOME');
 	const expenseGrouped = groupByTaxCategory(expenseAccounts, 'EXPENSE');
 
-	// Extract schedule name from scheduleRef (e.g., "Schedule C Line 8" -> "Schedule C")
-	function extractSchedule(scheduleRef: string | null): string | null {
-		if (!scheduleRef) return null;
-		// Match patterns like "Schedule C", "Schedule A", "Form 1120", "IT-201", "NJ-1040", "CA 540", "Schedule CA"
-		const match = scheduleRef.match(/^(Schedule [A-Z]{1,2}|Form \d+|[A-Z]{2}-?\d+|CA \d+)/);
-		return match ? match[1] : scheduleRef.split(' ')[0];
-	}
-
 	// Schedule descriptions
 	const scheduleDescriptions: Record<string, string> = {
 		'Schedule A': 'Itemized Deductions',
@@ -712,48 +737,56 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		'CA 540': 'California Resident Income Tax'
 	};
 
-	// Group deductible categories by schedule
-	const scheduleMap = new Map<string, {
-		income: TaxCategoryTotal[];
-		expenses: TaxCategoryTotal[];
-	}>();
-
-	for (const cat of incomeGrouped.deductible) {
-		const schedule = extractSchedule(cat.scheduleRef) ?? 'Other';
-		if (!scheduleMap.has(schedule)) {
-			scheduleMap.set(schedule, { income: [], expenses: [] });
+	// Group deductible categories by schedule and business
+	const scheduleMap = new Map<string, { schedule: string; scope: string | null; income: TaxCategoryTotal[]; expenses: TaxCategoryTotal[] }>();
+	const bucketFor = (cat: TaxCategoryTotal) => {
+		const schedule = scheduleOf(cat.scheduleRef) ?? 'Other';
+		const scope = scopeFor(cat.scheduleRef, cat.businessId);
+		const key = `${schedule}|${scope ?? '*'}`;
+		let bucket = scheduleMap.get(key);
+		if (!bucket) {
+			bucket = { schedule, scope, income: [], expenses: [] };
+			scheduleMap.set(key, bucket);
 		}
-		scheduleMap.get(schedule)!.income.push(cat);
-	}
+		return bucket;
+	};
+	for (const cat of incomeGrouped.deductible) bucketFor(cat).income.push(cat);
+	for (const cat of expenseGrouped.deductible) bucketFor(cat).expenses.push(cat);
 
-	for (const cat of expenseGrouped.deductible) {
-		const schedule = extractSchedule(cat.scheduleRef) ?? 'Other';
-		if (!scheduleMap.has(schedule)) {
-			scheduleMap.set(schedule, { income: [], expenses: [] });
-		}
-		scheduleMap.get(schedule)!.expenses.push(cat);
-	}
-
-	// Build sections array, sorted by schedule name (Schedule C first for business users)
+	// Sort sections by schedule (Schedule C first for business users), then
+	// by business in creation order with unassigned accounts last.
 	const scheduleOrder = ['Schedule C', 'Schedule A', 'Schedule B', 'Schedule D', 'Schedule E', 'Schedule 1', 'Form 1120', 'IT-201', 'NJ-1040'];
-	const sortedSchedules = Array.from(scheduleMap.keys()).sort((a, b) => {
-		const aIdx = scheduleOrder.indexOf(a);
-		const bIdx = scheduleOrder.indexOf(b);
-		if (aIdx === -1 && bIdx === -1) return a.localeCompare(b);
-		if (aIdx === -1) return 1;
-		if (bIdx === -1) return -1;
-		return aIdx - bIdx;
+	const businessOrder = (scope: string | null) => {
+		if (scope === null) return -1;
+		if (scope === '') return businesses.length;
+		return businesses.findIndex((b) => b.id === scope);
+	};
+	const sortedBuckets = Array.from(scheduleMap.values()).sort((a, b) => {
+		const aIdx = scheduleOrder.indexOf(a.schedule);
+		const bIdx = scheduleOrder.indexOf(b.schedule);
+		if (aIdx !== bIdx) {
+			if (aIdx === -1) return 1;
+			if (bIdx === -1) return -1;
+			return aIdx - bIdx;
+		}
+		if (a.schedule !== b.schedule) return a.schedule.localeCompare(b.schedule);
+		return businessOrder(a.scope) - businessOrder(b.scope);
 	});
 
-	const sections: ScheduleSection[] = sortedSchedules.map((schedule) => {
-		const data = scheduleMap.get(schedule)!;
+	const sections: ScheduleSection[] = sortedBuckets.map((data) => {
+		const { schedule, scope } = data;
 		const totalIncome = data.income.reduce((sum, c) => sum + c.total, 0);
 		const totalExpenses = data.expenses.reduce((sum, c) => sum + c.total, 0);
 		const reportedIncome = data.income.reduce((sum, c) => sum + c.reportedTotal, 0);
 		const reportedExpenses = data.expenses.reduce((sum, c) => sum + c.reportedTotal, 0);
+		const businessId = scope ? scope : null;
 		return {
+			key: scope === null ? schedule : `${schedule}|${scope}`,
 			schedule,
 			description: scheduleDescriptions[schedule] ?? '',
+			businessId,
+			businessName: businessId ? (businessNames.get(businessId) ?? null) : null,
+			unassigned: scope === '',
 			incomeCategories: data.income,
 			expenseCategories: data.expenses,
 			totalIncome,

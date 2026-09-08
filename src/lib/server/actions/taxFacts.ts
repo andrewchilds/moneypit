@@ -20,48 +20,89 @@ export async function listTaxFacts(bookId: string, year?: number) {
 	});
 }
 
-/** The fact for a key in a year, falling back to the carry-forward value. */
-export async function getTaxFact(bookId: string, year: number, key: string) {
+/**
+ * The fact for a key in a year, falling back to the carry-forward value.
+ * Per-business questions are looked up for the given business.
+ */
+export async function getTaxFact(bookId: string, year: number, key: string, businessId: string | null = null) {
 	const facts = await db.taxFact.findMany({
-		where: { bookId, key, OR: [{ year }, { year: null }] }
+		where: { bookId, key, businessId, OR: [{ year }, { year: null }] }
 	});
 	return facts.find((f) => f.year === year) ?? facts.find((f) => f.year === null) ?? null;
+}
+
+/**
+ * A per-business question must name a business once the book has any;
+ * other questions must not. Unknown keys accept either.
+ */
+async function checkBusinessScope(bookId: string, key: string, businessId: string | null): Promise<void> {
+	const found = findQuestion(key);
+	if (!found) return;
+	if (found.module.perBusiness) {
+		if (businessId) {
+			const business = await db.business.findUnique({ where: { id: businessId } });
+			if (!business || business.bookId !== bookId) throw new Error('Business not found in this book');
+		} else if ((await db.business.count({ where: { bookId } })) > 0) {
+			throw new Error(`${key} is answered per business; specify which business`);
+		}
+	} else if (businessId) {
+		throw new Error(`${key} is not a per-business question`);
+	}
+}
+
+function describe(key: string, year: number | null, business: { name: string } | null): string {
+	return `${key}${business ? ` (${business.name})` : ''}${year ? ` for ${year}` : ''}`;
 }
 
 /**
  * Set a fact. If the key belongs to a carry-forward question, it is stored
  * without a year regardless of the year passed.
  */
-export async function setTaxFact(bookId: string, key: string, value: FactValue, year: number | null) {
+export async function setTaxFact(
+	bookId: string,
+	key: string,
+	value: FactValue,
+	year: number | null,
+	businessId: string | null = null
+) {
 	const question = findQuestion(key)?.question;
 	const effectiveYear = question?.carryForward ? null : year;
+	await checkBusinessScope(bookId, key, businessId);
 
-	const existing = await db.taxFact.findFirst({ where: { bookId, key, year: effectiveYear } });
+	const existing = await db.taxFact.findFirst({
+		where: { bookId, key, year: effectiveYear, businessId },
+		include: { business: { select: { name: true } } }
+	});
 	const jsonValue = value as Prisma.InputJsonValue;
 
 	if (existing) {
+		const { business, ...previous } = existing;
 		const result = await db.taxFact.update({ where: { id: existing.id }, data: { value: jsonValue } });
-		const { before, after } = diff(serialize(existing), serialize(result));
+		const { before, after } = diff(serialize(previous), serialize(result));
 		if (Object.keys(before).length > 0) {
-			await logOperation(bookId, 'UPDATE', `Updated tax fact ${key}${effectiveYear ? ` for ${effectiveYear}` : ''}`, [
+			await logOperation(bookId, 'UPDATE', `Updated tax fact ${describe(key, effectiveYear, business)}`, [
 				{ entityType: 'TaxFact', entityId: result.id, before, after }
 			]);
 		}
 		return result;
 	}
 
-	const result = await db.taxFact.create({ data: { bookId, key, year: effectiveYear, value: jsonValue } });
-	await logOperation(bookId, 'CREATE', `Set tax fact ${key}${effectiveYear ? ` for ${effectiveYear}` : ''}`, [
-		{ entityType: 'TaxFact', entityId: result.id, before: null, after: serialize(result) }
+	const result = await db.taxFact.create({
+		data: { bookId, key, year: effectiveYear, value: jsonValue, businessId },
+		include: { business: { select: { name: true } } }
+	});
+	const { business, ...created } = result;
+	await logOperation(bookId, 'CREATE', `Set tax fact ${describe(key, effectiveYear, business)}`, [
+		{ entityType: 'TaxFact', entityId: result.id, before: null, after: serialize(created) }
 	]);
-	return result;
+	return created;
 }
 
-export async function deleteTaxFact(bookId: string, key: string, year: number | null) {
+export async function deleteTaxFact(bookId: string, key: string, year: number | null, businessId: string | null = null) {
 	const question = findQuestion(key)?.question;
 	const effectiveYear = question?.carryForward ? null : year;
-	const existing = await db.taxFact.findFirst({ where: { bookId, key, year: effectiveYear } });
-	if (!existing) throw new Error(`Fact not found: ${key}${effectiveYear ? ` for ${effectiveYear}` : ''}`);
+	const existing = await db.taxFact.findFirst({ where: { bookId, key, year: effectiveYear, businessId } });
+	if (!existing) throw new Error(`Fact not found: ${describe(key, effectiveYear, null)}`);
 	await db.taxFact.delete({ where: { id: existing.id } });
 	await logOperation(bookId, 'DELETE', `Deleted tax fact ${key}`, [
 		{ entityType: 'TaxFact', entityId: existing.id, before: serialize(existing), after: null }

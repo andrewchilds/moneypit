@@ -11,7 +11,8 @@ export type EntityType =
 	| 'DismissedDuplicate'
 	| 'TaxDocument'
 	| 'TaxDocumentLine'
-	| 'TaxFact';
+	| 'TaxFact'
+	| 'Business';
 
 export interface Change {
 	entityType: EntityType;
@@ -136,6 +137,9 @@ async function entityExists(
 		case 'TaxFact':
 			count = await tx.taxFact.count({ where: { id } });
 			break;
+		case 'Business':
+			count = await tx.business.count({ where: { id } });
+			break;
 	}
 	return count > 0;
 }
@@ -173,6 +177,9 @@ async function deleteEntity(
 		case 'TaxFact':
 			await tx.taxFact.delete({ where: { id } });
 			break;
+		case 'Business':
+			await tx.business.delete({ where: { id } });
+			break;
 	}
 }
 
@@ -193,6 +200,7 @@ async function recreateEntity(
 			delete cleanData.rules;
 			delete cleanData.balanceRecords;
 			delete cleanData.taxCategory;
+			delete cleanData.business;
 			await tx.account.create({ data: cleanData as Prisma.AccountUncheckedCreateInput });
 			break;
 		case 'Transaction':
@@ -228,6 +236,8 @@ async function recreateEntity(
 		case 'TaxDocument':
 			delete cleanData.lines;
 			delete cleanData.account;
+			delete cleanData.business;
+			delete cleanData.file;
 			await tx.taxDocument.create({ data: cleanData as Prisma.TaxDocumentUncheckedCreateInput });
 			break;
 		case 'TaxDocumentLine':
@@ -237,6 +247,12 @@ async function recreateEntity(
 			break;
 		case 'TaxFact':
 			await tx.taxFact.create({ data: cleanData as Prisma.TaxFactUncheckedCreateInput });
+			break;
+		case 'Business':
+			delete cleanData.accounts;
+			delete cleanData.taxFacts;
+			delete cleanData.taxDocuments;
+			await tx.business.create({ data: cleanData as Prisma.BusinessUncheckedCreateInput });
 			break;
 	}
 }
@@ -260,6 +276,7 @@ async function updateEntity(
 			delete cleanData.rules;
 			delete cleanData.balanceRecords;
 			delete cleanData.taxCategory;
+			delete cleanData.business;
 			await tx.account.update({
 				where: { id },
 				data: cleanData as Prisma.AccountUncheckedUpdateInput
@@ -309,6 +326,7 @@ async function updateEntity(
 		case 'TaxDocument':
 			delete cleanData.lines;
 			delete cleanData.account;
+			delete cleanData.business;
 			await tx.taxDocument.update({ where: { id }, data: cleanData as Prisma.TaxDocumentUncheckedUpdateInput });
 			break;
 		case 'TaxDocumentLine':
@@ -318,6 +336,12 @@ async function updateEntity(
 			break;
 		case 'TaxFact':
 			await tx.taxFact.update({ where: { id }, data: cleanData as Prisma.TaxFactUncheckedUpdateInput });
+			break;
+		case 'Business':
+			delete cleanData.accounts;
+			delete cleanData.taxFacts;
+			delete cleanData.taxDocuments;
+			await tx.business.update({ where: { id }, data: cleanData as Prisma.BusinessUncheckedUpdateInput });
 			break;
 	}
 }

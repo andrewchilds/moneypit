@@ -34,6 +34,7 @@
 	let editType = $state('');
 	let editPath = $state('');
 	let editTaxCategory = $state('');
+	let editBusinessId = $state('');
 	let editOpeningBalance = $state('');
 	let editLast4 = $state('');
 	let editAssetType = $state('');
@@ -129,6 +130,7 @@
 			editType = data.account.type;
 			editPath = data.account.path;
 			editTaxCategory = data.account.taxCategoryId ?? '';
+			editBusinessId = data.account.businessId ?? '';
 			editOpeningBalance = data.account.openingBalance != null ? String(data.account.openingBalance) : '';
 			editLast4 = data.account.last4 ?? '';
 			editAssetType = data.account.assetType ?? '';
@@ -294,6 +296,12 @@
 					{@const taxCat = data.taxCategories.find((tc) => tc.id === data.account.taxCategoryId)}
 					{#if taxCat}
 						<span class="tax-category">Tax: {taxCat.name}</span>
+					{/if}
+				{/if}
+				{#if data.account.businessId}
+					{@const business = data.businesses.find((b) => b.id === data.account.businessId)}
+					{#if business}
+						<span class="tax-category">Business: {business.name}</span>
 					{/if}
 				{/if}
 			</div>
@@ -514,10 +522,12 @@
 			bind:type={editType}
 			bind:path={editPath}
 			bind:taxCategoryId={editTaxCategory}
+			bind:businessId={editBusinessId}
 			bind:openingBalance={editOpeningBalance}
 			bind:last4={editLast4}
 			bind:assetType={editAssetType}
 			taxCategories={data.taxCategories}
+			businesses={data.businesses}
 			error={form?.error}
 			submitLabel="Save"
 			oncancel={() => (showEditModal = false)}

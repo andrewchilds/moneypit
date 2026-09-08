@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronRight, ChevronDown, DollarSign, FileText, AlertTriangle, Info, TrendingUp } from "lucide-svelte";
+	import { ChevronRight, ChevronDown, DollarSign, FileText, AlertTriangle, Info, TrendingUp, Briefcase } from "lucide-svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import type { PageData } from "./$types";
@@ -147,7 +147,7 @@
 				</thead>
 				<tbody>
 					{#each categories as category (category.taxCategoryId)}
-						{@const key = `${section.schedule}-${kind}-${category.taxCategoryId}`}
+						{@const key = `${section.key}-${kind}-${category.taxCategoryId}`}
 						<tr
 							class="category-row"
 							class:expandable={isExpandable(category)}
@@ -221,10 +221,22 @@
 	{/snippet}
 
 	<!-- Dynamic Schedule Sections -->
-	{#each data.taxData.sections as section (section.schedule)}
-		<section class="report-section">
-			<h2>{section.schedule}</h2>
-			{#if section.description}
+	{#each data.taxData.sections as section (section.key)}
+		<section class="report-section" class:warning-section={section.unassigned}>
+			<h2>
+				{section.schedule}
+				{#if section.businessName}
+					<span class="business-tag"><Briefcase size={14} /> {section.businessName}</span>
+				{:else if section.unassigned}
+					<span class="business-tag unassigned-tag">no business assigned</span>
+				{/if}
+			</h2>
+			{#if section.unassigned}
+				<p class="section-description">
+					These accounts have {section.schedule} categories but no business, so they aren't on any business's return.
+					<a href="/tax/{data.taxData.year}">Assign them in tax prep</a>.
+				</p>
+			{:else if section.description}
 				<p class="section-description">{section.description}</p>
 			{/if}
 
@@ -478,6 +490,29 @@
 	.report-section h2 {
 		margin: 0 0 var(--spacing-xs);
 		font-size: 18px;
+	}
+
+	.business-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		margin-left: var(--spacing-xs);
+		padding: 1px 8px;
+		font-size: 12px;
+		font-weight: 500;
+		vertical-align: middle;
+		border-radius: var(--radius-sm);
+		background: var(--color-primary-light, var(--color-bg-alt));
+		color: var(--color-primary);
+	}
+
+	.unassigned-tag {
+		background: var(--color-warning-light);
+		color: var(--color-text);
+	}
+
+	.section-description a {
+		color: var(--color-primary);
 	}
 
 	.section-description {

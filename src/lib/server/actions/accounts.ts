@@ -12,6 +12,13 @@ export interface CreateAccountOptions {
 	openingBalance?: number;
 	last4?: string;
 	assetType?: AssetType;
+	businessId?: string;
+}
+
+async function checkBusiness(bookId: string, businessId: string | null | undefined): Promise<void> {
+	if (!businessId) return;
+	const business = await db.business.findUnique({ where: { id: businessId } });
+	if (!business || business.bookId !== bookId) throw new Error('Business not found in this book');
 }
 
 export interface AccountTreeNode {
@@ -52,6 +59,7 @@ export async function createAccount(
 	path: string,
 	opts?: CreateAccountOptions
 ): Promise<Account> {
+	await checkBusiness(bookId, opts?.businessId);
 	const result = await db.account.create({
 		data: {
 			bookId,
@@ -60,7 +68,8 @@ export async function createAccount(
 			taxCategoryId: opts?.taxCategoryId,
 			openingBalance: opts?.openingBalance,
 			last4: opts?.last4,
-			assetType: opts?.assetType
+			assetType: opts?.assetType,
+			businessId: opts?.businessId
 		}
 	});
 
@@ -78,9 +87,18 @@ export async function createAccount(
 
 export async function updateAccount(
 	id: string,
-	data: { type?: AccountType; path?: string; taxCategoryId?: string | null; openingBalance?: number | null; last4?: string | null; assetType?: AssetType | null }
+	data: {
+		type?: AccountType;
+		path?: string;
+		taxCategoryId?: string | null;
+		openingBalance?: number | null;
+		last4?: string | null;
+		assetType?: AssetType | null;
+		businessId?: string | null;
+	}
 ): Promise<Account> {
 	const before = await db.account.findUniqueOrThrow({ where: { id } });
+	await checkBusiness(before.bookId, data.businessId);
 
 	const result = await db.account.update({
 		where: { id },

@@ -31,8 +31,8 @@ CONFIG
 ACCOUNTS
   account:list [--type <type>] [--prefix <path>] [--condensed]
   account:get <id>
-  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>]
-  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>]
+  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]
+  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]
   account:delete <id>
   account:tree [--type <type>]
 
@@ -62,25 +62,37 @@ TAX MODULES
   module:enable <id>      Enable a module (seeds its categories)
   module:disable <id>     Disable a module (deletes unused categories)
 
+BUSINESSES (one Schedule C each; accounts, answers, and documents belong to one)
+  business:list [--condensed]
+  business:get <id|name>
+  business:create <name>                First business adopts existing Schedule C accounts and answers
+  business:update <id|name> --name <name>
+  business:delete <id|name>             Unassigns its accounts and documents; deletes its answers
+  business:assign <id|name> <account-ids...>
+
 TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
   tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
   fact:list [--year <year>]             Questions from enabled modules with their answers
-  fact:set <key> <value> [--year <year>] [--carry-forward]
-  fact:get <key> [--year <year>]
-  fact:delete <key> [--year <year>] [--carry-forward]
+  fact:set <key> <value> [--year <year>] [--carry-forward] [--business <id|name>]
+  fact:get <key> [--year <year>] [--business <id|name>]
+  fact:delete <key> [--year <year>] [--carry-forward] [--business <id|name>]
 
 TAX DOCUMENTS (W-2, 1099s, 1098, 1095-A, ...)
   doc:list [--year <year>] [--condensed]
   doc:get <id>
-  doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--notes <text>] [--na]
-  doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--notes <text>] [--status received|na]
+  doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--business <id|name>] [--notes <text>] [--na]
+  doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--business <id|name>] [--notes <text>] [--status received|na]
   doc:delete <id>
   doc:line <doc-id> --box <box> --amount <amount> [--label <text>] [--category <id|name>] [--no-category]
   doc:line-delete <line-id>
+  doc:attach <doc-id> <file>            Attach the form itself (PDF, PNG, JPEG, WebP)
+  doc:detach <doc-id>                   Remove the attached file
   doc:forms                             Known form types and their boxes
 
   --year defaults to the most recently completed calendar year.
+  Schedule C questions are answered per business once the book has one;
+  pass --business to fact:set and to doc:add for 1099-NEC/1099-K forms.
   Document lines mapped to a tax category override the book total for that
   category in the tax report. Boxes listed by doc:forms get a label and a
   category automatically; --category overrides, --no-category leaves it unmapped.

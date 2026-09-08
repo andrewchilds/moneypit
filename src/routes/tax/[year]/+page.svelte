@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { enhance } from "$app/forms";
 	import { goto } from "$app/navigation";
-	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, ChevronRight } from "lucide-svelte";
+	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, ChevronRight, Briefcase, FileUp, FileText, Crosshair } from "lucide-svelte";
+	import { sniffFileText } from "$lib/pdf/client";
+	import { detectFormType } from "$lib/documentFigures";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import Button from "$lib/components/ui/Button.svelte";
@@ -21,39 +23,56 @@
 	let newFormType = $state("");
 	let newIssuer = $state("");
 	let newAccountId = $state("");
+	let newBusinessId = $state("");
 	let newStatus = $state("RECEIVED");
+
+	let newFile = $state<File | null>(null);
+	let newFileInput = $state<HTMLInputElement | undefined>();
 
 	function openAddDocument(expected?: Expected) {
 		newFormType = expected?.formType ?? "";
 		newIssuer = expected?.institution ?? "";
 		newAccountId = expected?.accountIds[0] ?? "";
+		newBusinessId = expected?.businessId ?? "";
 		newStatus = "RECEIVED";
+		newFile = null;
+		if (newFileInput) newFileInput.value = "";
 		showAddDocument = true;
 	}
 
-	// Which documents have their add-line form open
-	let addingLineFor = $state<string | null>(null);
-	let lineBox = $state("");
-	let lineLabel = $state("");
-	let lineAmount = $state("");
-	let lineCategory = $state("");
-
-	function openAddLine(documentId: string) {
-		addingLineFor = documentId;
-		lineBox = "";
-		lineLabel = "";
-		lineAmount = "";
-		lineCategory = "";
+	/** A dropped or chosen file can tell us which form it is. */
+	async function onNewFileChange() {
+		newFile = newFileInput?.files?.[0] ?? null;
+		if (!newFile || newFormType) return;
+		const detected = detectFormType(await sniffFileText(newFile));
+		if (detected && !newFormType) newFormType = detected;
 	}
 
-	function boxesFor(formType: string) {
-		return data.formPresets[formType]?.boxes ?? [];
+	function onModalDrop(e: DragEvent) {
+		e.preventDefault();
+		const file = e.dataTransfer?.files?.[0];
+		if (!file || !newFileInput) return;
+		const dt = new DataTransfer();
+		dt.items.add(file);
+		newFileInput.files = dt.files;
+		void onNewFileChange();
 	}
 
-	function onBoxChange(formType: string) {
-		const preset = boxesFor(formType).find((b) => b.box === lineBox);
-		if (preset) lineLabel = preset.label;
+	// Attach a file to an existing document straight from its card
+	function submitAttach(e: Event) {
+		(e.currentTarget as HTMLInputElement).form?.requestSubmit();
 	}
+
+	// Businesses: one Schedule C each
+	const businesses = $derived(data.status.businesses);
+	let newBusinessName = $state("");
+	let renamingBusiness = $state<string | null>(null);
+	let renameValue = $state("");
+
+	const accountsOf = (businessId: string) => data.businessAccounts.filter((a) => a.businessId === businessId);
+	const unassignedAccounts = $derived(businesses.length > 0 ? data.businessAccounts.filter((a) => !a.businessId) : []);
+	const businessName = (id: string | null) => businesses.find((b) => b.id === id)?.name ?? null;
+
 
 	function handleYearChange(event: Event) {
 		const select = event.target as HTMLSelectElement;
@@ -121,17 +140,137 @@
 		</section>
 	{/if}
 
-	{#each data.status.modules as module (module.moduleId)}
+	<!-- Businesses -->
+	{#if data.hasPerBusinessModule}
+		<section class="section">
+			<div class="section-header">
+				<h2>Businesses</h2>
+			</div>
+			<p class="muted">
+				Each business files its own Schedule C. Accounts with Schedule C categories are assigned to one, and the
+				Schedule C questions below are asked once per business.
+				{#if businesses.length === 0}
+					With no businesses, the book is treated as a single business.
+				{/if}
+			</p>
+			{#each businesses as b (b.id)}
+				<article class="business">
+					<header class="business-header">
+						{#if renamingBusiness === b.id}
+							<form
+								method="POST"
+								action="?/renameBusiness"
+								class="inline-form"
+								use:enhance={() =>
+									async ({ result, update }) => {
+										if (result.type === "success") renamingBusiness = null;
+										await update();
+									}}
+							>
+								<input type="hidden" name="id" value={b.id} />
+								<input name="name" bind:value={renameValue} required aria-label="Business name" />
+								<Button variant="primary" size="sm" type="submit">Save</Button>
+								<Button variant="secondary" size="sm" onclick={() => (renamingBusiness = null)}>Cancel</Button>
+							</form>
+						{:else}
+							<div class="business-title">
+								<Briefcase size={16} />
+								<strong>{b.name}</strong>
+							</div>
+							<div class="document-actions">
+								<Button
+									variant="ghost"
+									size="sm"
+									onclick={() => {
+										renamingBusiness = b.id;
+										renameValue = b.name;
+									}}>Rename</Button
+								>
+								<form method="POST" action="?/deleteBusiness" use:enhance>
+									<input type="hidden" name="id" value={b.id} />
+									<Button variant="ghost" size="sm" type="submit"><Trash2 size={14} /></Button>
+								</form>
+							</div>
+						{/if}
+					</header>
+					{#if accountsOf(b.id).length > 0}
+						<ul class="account-list">
+							{#each accountsOf(b.id) as a (a.id)}
+								<li>
+									<a href="/accounts/{a.id}">{a.path}</a>
+									<form method="POST" action="?/assignAccount" use:enhance>
+										<input type="hidden" name="accountId" value={a.id} />
+										<input type="hidden" name="businessId" value="" />
+										<button type="submit" class="link-button">unassign</button>
+									</form>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="hint">No accounts assigned yet.</p>
+					{/if}
+				</article>
+			{/each}
+
+			{#if unassignedAccounts.length > 0}
+				<div class="unassigned">
+					<p class="unassigned-title">
+						{unassignedAccounts.length} account{unassignedAccounts.length === 1 ? "" : "s"} with Schedule C categories
+						{unassignedAccounts.length === 1 ? "has" : "have"} no business. Pick one for each so the report splits correctly.
+					</p>
+					<ul class="account-list">
+						{#each unassignedAccounts as a (a.id)}
+							<li>
+								<a href="/accounts/{a.id}">{a.path}</a>
+								<form method="POST" action="?/assignAccount" use:enhance class="inline-form">
+									<input type="hidden" name="accountId" value={a.id} />
+									<select name="businessId" aria-label="Business for {a.path}" onchange={(e) => e.currentTarget.form?.requestSubmit()}>
+										<option value="">Assign to…</option>
+										{#each businesses as b (b.id)}
+											<option value={b.id}>{b.name}</option>
+										{/each}
+									</select>
+								</form>
+							</li>
+						{/each}
+					</ul>
+				</div>
+			{/if}
+
+			<form
+				method="POST"
+				action="?/addBusiness"
+				class="inline-form add-business"
+				use:enhance={() =>
+					async ({ result, update }) => {
+						if (result.type === "success") newBusinessName = "";
+						await update();
+					}}
+			>
+				<input name="name" bind:value={newBusinessName} placeholder="Business name" required />
+				<Button variant="primary" size="sm" type="submit"><Plus size={16} /> Add business</Button>
+			</form>
+		</section>
+	{/if}
+
+	{#each data.status.modules as module (`${module.moduleId}:${module.businessId ?? ""}`)}
 		{@const visible = module.questions.filter((q) => q.visible)}
+		{@const scope = module.businessId ?? ""}
 		{#if visible.length > 0}
 			<section class="section">
-				<h2>{module.name}</h2>
+				<h2>
+					{module.name}
+					{#if module.businessName}
+						<span class="business-tag"><Briefcase size={14} /> {module.businessName}</span>
+					{/if}
+				</h2>
 				<div class="questions">
 					{#each visible as q (q.key)}
 						<form method="POST" action="?/answer" use:enhance class="question" class:answered={q.answered}>
 							<input type="hidden" name="key" value={q.key} />
+							<input type="hidden" name="businessId" value={scope} />
 							<div class="question-text">
-								<label for="q-{q.key}">{q.prompt}</label>
+								<label for="q-{q.key}-{scope}">{q.prompt}</label>
 								{#if q.description}
 									<p class="hint">{q.description}</p>
 								{/if}
@@ -143,13 +282,13 @@
 							</div>
 							<div class="question-input">
 								{#if q.type === "boolean"}
-									<select id="q-{q.key}" name="value" value={formatAnswer(q)}>
+									<select id="q-{q.key}-{scope}" name="value" value={formatAnswer(q)}>
 										<option value="">—</option>
 										<option value="true">Yes</option>
 										<option value="false">No</option>
 									</select>
 								{:else if q.type === "choice"}
-									<select id="q-{q.key}" name="value" value={formatAnswer(q)}>
+									<select id="q-{q.key}-{scope}" name="value" value={formatAnswer(q)}>
 										<option value="">—</option>
 										{#each q.options ?? [] as opt (opt.value)}
 											<option value={opt.value}>{opt.label}</option>
@@ -157,7 +296,7 @@
 									</select>
 								{:else if q.type === "amount" || q.type === "number"}
 									<input
-										id="q-{q.key}"
+										id="q-{q.key}-{scope}"
 										type="number"
 										name="value"
 										step={q.type === "amount" ? "0.01" : "1"}
@@ -165,9 +304,9 @@
 										placeholder={q.type === "amount" ? "0.00" : ""}
 									/>
 								{:else if q.type === "date"}
-									<input id="q-{q.key}" type="date" name="value" value={formatAnswer(q)} />
+									<input id="q-{q.key}-{scope}" type="date" name="value" value={formatAnswer(q)} />
 								{:else}
-									<input id="q-{q.key}" type="text" name="value" value={formatAnswer(q)} />
+									<input id="q-{q.key}-{scope}" type="text" name="value" value={formatAnswer(q)} />
 								{/if}
 								<Button variant="secondary" size="sm" type="submit">Save</Button>
 							</div>
@@ -190,7 +329,8 @@
 			</Button>
 		</div>
 		<p class="muted">
-			Inferred from this year's transactions and your answers. Mark one not applicable if it won't arrive.
+			Inferred from this year's transactions and your answers. When a form arrives, add it with its PDF and read the
+			figures straight off the page. Mark one not applicable if it won't arrive.
 		</p>
 		{#if data.status.expectedDocuments.length === 0}
 			<p class="muted">Nothing expected yet.</p>
@@ -209,7 +349,7 @@
 					{#each data.status.expectedDocuments as exp (exp.formType + exp.institution + exp.reason)}
 						<tr>
 							<td class="mono">{exp.formType}</td>
-							<td>{exp.institution || "—"}</td>
+							<td>{exp.institution || businessName(exp.businessId) || "—"}</td>
 							<td class="muted">{exp.reason}</td>
 							<td>
 								<span class="status status-{exp.status}">
@@ -218,16 +358,17 @@
 							</td>
 							<td class="actions">
 								{#if exp.status === "missing"}
-									<Button size="sm" onclick={() => openAddDocument(exp)}>Add</Button>
+									<Button size="sm" onclick={() => openAddDocument(exp)}><FileUp size={14} /> Add</Button>
 									<form method="POST" action="?/addDocument" use:enhance>
 										<input type="hidden" name="formType" value={exp.formType} />
 										<input type="hidden" name="issuer" value={exp.institution || exp.formType} />
 										<input type="hidden" name="accountId" value={exp.accountIds[0] ?? ""} />
+										<input type="hidden" name="businessId" value={exp.businessId ?? ""} />
 										<input type="hidden" name="status" value="NOT_APPLICABLE" />
 										<Button variant="ghost" size="sm" type="submit">Mark N/A</Button>
 									</form>
 								{:else if exp.documentId}
-									<a href="#doc-{exp.documentId}">View</a>
+									<a href="/tax/documents/{exp.documentId}">Open</a>
 								{/if}
 							</td>
 						</tr>
@@ -240,6 +381,9 @@
 	<!-- Documents on hand -->
 	<section class="section">
 		<h2>Documents</h2>
+		<p class="muted">
+			Open a document to fill in its boxes: attach the form and click each figure, or type them in.
+		</p>
 		{#if data.status.documents.length === 0}
 			<p class="muted">No documents recorded for {year}.</p>
 		{/if}
@@ -252,11 +396,17 @@
 						{#if doc.account}
 							<span class="muted">· {doc.account.path}</span>
 						{/if}
+						{#if doc.business}
+							<span class="business-tag"><Briefcase size={12} /> {doc.business.name}</span>
+						{/if}
 						{#if doc.status === "NOT_APPLICABLE"}
 							<span class="tag">not applicable</span>
 						{/if}
 						{#if doc.notes}
 							<p class="hint">{doc.notes}</p>
+						{/if}
+						{#if doc.file}
+							<p class="hint file-hint"><FileText size={12} /> {doc.file.filename}</p>
 						{/if}
 					</div>
 					<div class="document-actions">
@@ -267,7 +417,19 @@
 								<Button variant="ghost" size="sm" type="submit">Mark received</Button>
 							</form>
 						{:else}
-							<Button variant="ghost" size="sm" onclick={() => openAddLine(doc.id)}><Plus size={14} /> Line</Button>
+							{#if !doc.file}
+								<form method="POST" action="?/attachFile" enctype="multipart/form-data" use:enhance>
+									<input type="hidden" name="id" value={doc.id} />
+									<label class="attach-label">
+										<FileUp size={14} /> Attach file
+										<input type="file" name="file" accept="application/pdf,image/*" onchange={submitAttach} />
+									</label>
+								</form>
+							{/if}
+							<a class="open-link" href="/tax/documents/{doc.id}">
+								<Crosshair size={14} />
+								{doc.file ? "Open" : doc.lines.length > 0 ? "Edit boxes" : "Fill in boxes"}
+							</a>
 						{/if}
 						<form method="POST" action="?/deleteDocument" use:enhance>
 							<input type="hidden" name="id" value={doc.id} />
@@ -291,7 +453,12 @@
 							{#each doc.lines as line (line.id)}
 								<tr>
 									<td class="mono">{line.box}</td>
-									<td>{line.label}</td>
+									<td>
+										{line.label}
+										{#if line.page}
+											<span class="pin" title="Read from page {line.page} of {doc.file?.filename ?? 'the file'}"><Crosshair size={11} /></span>
+										{/if}
+									</td>
 									<td class:muted={!line.taxCategory}>{line.taxCategory?.name ?? "not mapped"}</td>
 									<td class="amount">{formatCurrency(line.amount)}</td>
 									<td class="actions">
@@ -312,62 +479,6 @@
 					</table>
 				{/if}
 
-				{#if addingLineFor === doc.id}
-					<form
-						method="POST"
-						action="?/addLine"
-						class="line-form"
-						use:enhance={() =>
-							async ({ result, update }) => {
-								if (result.type === "success") addingLineFor = null;
-								await update();
-							}}
-					>
-						<input type="hidden" name="documentId" value={doc.id} />
-						<div class="form-group">
-							<label for="box-{doc.id}">Box</label>
-							{#if boxesFor(doc.formType).length > 0}
-								<input
-									id="box-{doc.id}"
-									name="box"
-									list="boxes-{doc.id}"
-									bind:value={lineBox}
-									onchange={() => onBoxChange(doc.formType)}
-									required
-								/>
-								<datalist id="boxes-{doc.id}">
-									{#each boxesFor(doc.formType) as b (b.box)}
-										<option value={b.box}>{b.label}</option>
-									{/each}
-								</datalist>
-							{:else}
-								<input id="box-{doc.id}" name="box" bind:value={lineBox} required />
-							{/if}
-						</div>
-						<div class="form-group grow">
-							<label for="label-{doc.id}">Label</label>
-							<input id="label-{doc.id}" name="label" bind:value={lineLabel} placeholder="From the form" />
-						</div>
-						<div class="form-group">
-							<label for="amount-{doc.id}">Amount</label>
-							<input id="amount-{doc.id}" type="number" step="0.01" name="amount" bind:value={lineAmount} required />
-						</div>
-						<div class="form-group grow">
-							<label for="category-{doc.id}">Tax category</label>
-							<select id="category-{doc.id}" name="category" bind:value={lineCategory}>
-								<option value="">Guess from the box</option>
-								<option value="none">Not mapped</option>
-								{#each data.taxCategories as c (c.id)}
-									<option value={c.id}>{c.name}{c.scheduleRef ? ` (${c.scheduleRef})` : ""}</option>
-								{/each}
-							</select>
-						</div>
-						<div class="form-actions">
-							<Button variant="secondary" size="sm" onclick={() => (addingLineFor = null)}>Cancel</Button>
-							<Button variant="primary" size="sm" type="submit">Add line</Button>
-						</div>
-					</form>
-				{/if}
 			</article>
 		{/each}
 	</section>
@@ -378,12 +489,34 @@
 		method="POST"
 		action="?/addDocument"
 		class="modal-form"
+		enctype="multipart/form-data"
 		use:enhance={() =>
 			async ({ result, update }) => {
-				if (result.type === "success") showAddDocument = false;
+				if (result.type === "success") {
+					showAddDocument = false;
+					const { documentId, attached } = result.data as { documentId: string; attached: boolean };
+					if (attached) {
+						await goto(`/tax/documents/${documentId}`);
+						return;
+					}
+				}
 				await update();
 			}}
 	>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="drop-area" class:has-file={!!newFile} ondragover={(e) => e.preventDefault()} ondrop={onModalDrop}>
+			<label class="drop-label">
+				<FileUp size={20} />
+				{#if newFile}
+					<strong>{newFile.name}</strong>
+					<span class="hint">Click to choose a different file</span>
+				{:else}
+					<strong>Drop the form here</strong>
+					<span class="hint">PDF or image, optional. You can read the figures straight off it.</span>
+				{/if}
+				<input type="file" name="file" accept="application/pdf,image/*" bind:this={newFileInput} onchange={onNewFileChange} />
+			</label>
+		</div>
 		<div class="form-group">
 			<label for="new-form-type">Form type</label>
 			<input id="new-form-type" name="formType" list="form-types" bind:value={newFormType} required placeholder="1099-INT" />
@@ -406,6 +539,17 @@
 				{/each}
 			</select>
 		</div>
+		{#if businesses.length > 0}
+			<div class="form-group">
+				<label for="new-business">Business (optional)</label>
+				<select id="new-business" name="businessId" bind:value={newBusinessId}>
+					<option value="">—</option>
+					{#each businesses as b (b.id)}
+						<option value={b.id}>{b.name}</option>
+					{/each}
+				</select>
+			</div>
+		{/if}
 		<div class="form-group">
 			<label for="new-status">Status</label>
 			<select id="new-status" name="status" bind:value={newStatus}>
@@ -419,7 +563,7 @@
 		</div>
 		<div class="form-actions">
 			<Button variant="secondary" onclick={() => (showAddDocument = false)}>Cancel</Button>
-			<Button variant="primary" type="submit">Add</Button>
+			<Button variant="primary" type="submit">{newFile ? "Add and open" : "Add"}</Button>
 		</div>
 	</form>
 </Modal>
@@ -512,6 +656,112 @@
 		border-radius: var(--radius-sm);
 		background: var(--color-bg-alt);
 		color: var(--color-text-muted);
+	}
+
+	.section h2 .business-tag {
+		vertical-align: middle;
+	}
+
+	.business-tag {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		margin-left: var(--spacing-xs);
+		padding: 1px 8px;
+		font-size: 12px;
+		font-weight: 500;
+		border-radius: var(--radius-sm);
+		background: var(--color-primary-light, var(--color-bg-alt));
+		color: var(--color-primary);
+	}
+
+	.business {
+		margin-top: var(--spacing-md);
+		padding: var(--spacing-md);
+		border: 1px solid var(--color-border-light);
+		border-radius: var(--radius-md);
+	}
+
+	.business-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: var(--spacing-md);
+	}
+
+	.business-title {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-xs);
+	}
+
+	.account-list {
+		list-style: none;
+		margin: var(--spacing-sm) 0 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 14px;
+	}
+
+	.account-list li {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-sm);
+	}
+
+	.account-list a {
+		color: var(--color-text);
+		text-decoration: none;
+	}
+
+	.account-list a:hover {
+		color: var(--color-primary);
+	}
+
+	.link-button {
+		background: none;
+		border: none;
+		padding: 0;
+		font-size: 12px;
+		color: var(--color-text-muted);
+		cursor: pointer;
+	}
+
+	.link-button:hover {
+		color: var(--color-danger);
+	}
+
+	.unassigned {
+		margin-top: var(--spacing-md);
+		padding: var(--spacing-md);
+		background: var(--color-warning-light);
+		border: 1px solid var(--color-warning);
+		border-radius: var(--radius-md);
+	}
+
+	.unassigned-title {
+		margin: 0;
+		font-size: 14px;
+	}
+
+	.inline-form {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-sm);
+	}
+
+	.inline-form input,
+	.inline-form select {
+		padding: 6px 8px;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		font-size: 14px;
+	}
+
+	.add-business {
+		margin-top: var(--spacing-md);
 	}
 
 	.questions {
@@ -657,6 +907,80 @@
 
 	.total-row {
 		background: var(--color-bg-alt);
+	}
+
+	.file-hint {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.attach-label,
+	.open-link {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--spacing-xs);
+		padding: 4px 10px;
+		font-size: 13px;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg);
+		color: var(--color-text);
+		text-decoration: none;
+		cursor: pointer;
+	}
+
+	.attach-label:hover,
+	.open-link:hover {
+		background: var(--color-bg-hover);
+	}
+
+	.open-link {
+		border-color: var(--color-primary);
+		color: var(--color-primary);
+	}
+
+	.attach-label input {
+		display: none;
+	}
+
+	.pin {
+		display: inline-flex;
+		vertical-align: middle;
+		margin-left: 4px;
+		color: var(--color-success);
+	}
+
+	.drop-area {
+		margin-bottom: var(--spacing-sm);
+		border: 2px dashed var(--color-border);
+		border-radius: var(--radius-md);
+		text-align: center;
+	}
+
+	.drop-area.has-file {
+		border-style: solid;
+		border-color: var(--color-success);
+		background: var(--color-success-light);
+	}
+
+	.drop-label {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 2px;
+		padding: var(--spacing-md);
+		color: var(--color-text-muted);
+		cursor: pointer;
+	}
+
+	.drop-label strong {
+		color: var(--color-text);
+		font-size: 14px;
+	}
+
+	.drop-label input {
+		display: none;
 	}
 
 	.line-form {

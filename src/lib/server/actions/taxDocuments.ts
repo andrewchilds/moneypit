@@ -8,6 +8,7 @@ export interface CreateTaxDocumentData {
 	formType: string;
 	issuer: string;
 	accountId?: string | null;
+	businessId?: string | null;
 	notes?: string | null;
 	status?: TaxDocumentStatus;
 }
@@ -15,9 +16,19 @@ export interface CreateTaxDocumentData {
 export interface UpdateTaxDocumentData {
 	issuer?: string;
 	accountId?: string | null;
+	businessId?: string | null;
 	notes?: string | null;
 	status?: TaxDocumentStatus;
 	formType?: string;
+}
+
+/** Where on the attached file a figure was read from. Fractions of the page. */
+export interface LineRegion {
+	page: number;
+	x: number;
+	y: number;
+	w: number;
+	h: number;
 }
 
 export interface AddDocumentLineData {
@@ -26,12 +37,39 @@ export interface AddDocumentLineData {
 	label?: string;
 	/** Tax category id, or a category name to look up in the book */
 	category?: string | null;
+	/** undefined keeps an existing region on replace; null clears it */
+	region?: LineRegion | null;
 }
+
+export interface AttachDocumentFileData {
+	filename: string;
+	mimeType: string;
+	data: Uint8Array<ArrayBuffer>;
+}
+
+export const DOCUMENT_FILE_TYPES: Record<string, string> = {
+	'application/pdf': 'pdf',
+	'image/png': 'png',
+	'image/jpeg': 'jpg',
+	'image/webp': 'webp'
+};
+
+export const MAX_DOCUMENT_FILE_BYTES = 25 * 1024 * 1024;
+
+const fileSelect = { id: true, filename: true, mimeType: true, size: true, createdAt: true };
 
 const documentInclude = {
 	lines: { orderBy: { box: 'asc' as const }, include: { taxCategory: { select: { id: true, name: true, scheduleRef: true } } } },
-	account: { select: { id: true, path: true } }
+	account: { select: { id: true, path: true } },
+	business: { select: { id: true, name: true } },
+	file: { select: fileSelect }
 };
+
+async function checkBusiness(bookId: string, businessId: string | null | undefined): Promise<void> {
+	if (!businessId) return;
+	const business = await db.business.findUnique({ where: { id: businessId } });
+	if (!business || business.bookId !== bookId) throw new Error('Business not found in this book');
+}
 
 export async function listTaxDocuments(bookId: string, year?: number) {
 	return db.taxDocument.findMany({
@@ -52,6 +90,7 @@ export async function createTaxDocument(bookId: string, data: CreateTaxDocumentD
 		const account = await db.account.findUnique({ where: { id: data.accountId } });
 		if (!account || account.bookId !== bookId) throw new Error('Account not found in this book');
 	}
+	await checkBusiness(bookId, data.businessId);
 
 	const result = await db.taxDocument.create({
 		data: {
@@ -60,6 +99,7 @@ export async function createTaxDocument(bookId: string, data: CreateTaxDocumentD
 			formType: normalizeFormType(data.formType),
 			issuer: data.issuer.trim(),
 			accountId: data.accountId ?? null,
+			businessId: data.businessId ?? null,
 			notes: data.notes ?? null,
 			status: data.status ?? 'RECEIVED'
 		},
@@ -79,6 +119,7 @@ export async function updateTaxDocument(id: string, data: UpdateTaxDocumentData)
 		const account = await db.account.findUnique({ where: { id: data.accountId } });
 		if (!account || account.bookId !== existing.bookId) throw new Error('Account not found in this book');
 	}
+	await checkBusiness(existing.bookId, data.businessId);
 
 	const result = await db.taxDocument.update({
 		where: { id },
@@ -86,6 +127,7 @@ export async function updateTaxDocument(id: string, data: UpdateTaxDocumentData)
 			...(data.issuer !== undefined && { issuer: data.issuer.trim() }),
 			...(data.formType !== undefined && { formType: normalizeFormType(data.formType) }),
 			...(data.accountId !== undefined && { accountId: data.accountId }),
+			...(data.businessId !== undefined && { businessId: data.businessId }),
 			...(data.notes !== undefined && { notes: data.notes }),
 			...(data.status !== undefined && { status: data.status })
 		},
@@ -141,10 +183,14 @@ export async function addDocumentLine(documentId: string, data: AddDocumentLineD
 		where: { documentId, box: { equals: box, mode: 'insensitive' } }
 	});
 
-	const lineData = { box, label, amount: data.amount, taxCategoryId };
+	const region = data.region === undefined ? {} : regionFields(data.region);
+	const lineData = { box, label, amount: data.amount, taxCategoryId, ...region };
 	const result = existing
 		? await db.taxDocumentLine.update({ where: { id: existing.id }, data: lineData, include: { taxCategory: true } })
-		: await db.taxDocumentLine.create({ data: { documentId, ...lineData }, include: { taxCategory: true } });
+		: await db.taxDocumentLine.create({
+				data: { documentId, ...lineData, ...regionFields(data.region ?? null) },
+				include: { taxCategory: true }
+			});
 
 	if (existing) {
 		const { before, after } = diff(serialize(existing), serialize({ ...result, taxCategory: undefined }));
@@ -161,6 +207,77 @@ export async function addDocumentLine(documentId: string, data: AddDocumentLineD
 	return result;
 }
 
+function regionFields(region: LineRegion | null) {
+	if (!region) return { page: null, x: null, y: null, w: null, h: null };
+	const { page, x, y, w, h } = region;
+	if (!Number.isInteger(page) || page < 1) throw new Error('Region page must be a positive integer');
+	for (const v of [x, y, w, h]) {
+		if (typeof v !== 'number' || Number.isNaN(v) || v < 0 || v > 1) throw new Error('Region must be fractions of the page');
+	}
+	return { page, x, y, w, h };
+}
+
+/** Attach the form itself (PDF or image) to a document, replacing any earlier file. */
+export async function attachDocumentFile(documentId: string, file: AttachDocumentFileData) {
+	const document = await db.taxDocument.findUnique({ where: { id: documentId } });
+	if (!document) throw new Error('Document not found');
+	if (!DOCUMENT_FILE_TYPES[file.mimeType]) {
+		throw new Error(`Unsupported file type ${file.mimeType}; use a PDF, PNG, JPEG, or WebP`);
+	}
+	if (file.data.byteLength === 0) throw new Error('File is empty');
+	if (file.data.byteLength > MAX_DOCUMENT_FILE_BYTES) throw new Error('File is larger than 25 MB');
+
+	const filename = file.filename.trim() || `${document.formType}.${DOCUMENT_FILE_TYPES[file.mimeType]}`;
+	// Replace rather than update so the file id (used as a cache key) changes,
+	// and clear regions that pointed into the old file.
+	const [, , result] = await db.$transaction([
+		db.taxDocumentFile.deleteMany({ where: { documentId } }),
+		db.taxDocumentLine.updateMany({ where: { documentId }, data: regionFields(null) }),
+		db.taxDocumentFile.create({
+			data: { documentId, filename, mimeType: file.mimeType, size: file.data.byteLength, data: file.data },
+			select: fileSelect
+		})
+	]);
+	await logOperation(document.bookId, 'UPDATE', `Attached ${filename} to ${document.formType} from ${document.issuer}`, [
+		{ entityType: 'TaxDocument', entityId: documentId, before: {}, after: {} }
+	]);
+	return result;
+}
+
+const EXTENSION_TYPES: Record<string, string> = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+
+/** Work out the MIME type of an upload from what the browser says, then the extension. */
+export function documentFileType(filename: string, declared?: string | null): string {
+	if (declared && DOCUMENT_FILE_TYPES[declared]) return declared;
+	const ext = filename.toLowerCase().split('.').pop() ?? '';
+	return EXTENSION_TYPES[ext] ?? declared ?? 'application/octet-stream';
+}
+
+/** Attach a file from a multipart form upload. */
+export async function attachUploadedFile(documentId: string, file: File) {
+	const data = new Uint8Array(await file.arrayBuffer()) as Uint8Array<ArrayBuffer>;
+	return attachDocumentFile(documentId, { filename: file.name, mimeType: documentFileType(file.name, file.type), data });
+}
+
+/** Remove the attached file. Lines keep their amounts but lose their regions. */
+export async function detachDocumentFile(documentId: string) {
+	const document = await db.taxDocument.findUnique({ where: { id: documentId }, include: { file: { select: fileSelect } } });
+	if (!document) throw new Error('Document not found');
+	if (!document.file) throw new Error('Document has no file attached');
+	await db.$transaction([
+		db.taxDocumentFile.delete({ where: { documentId } }),
+		db.taxDocumentLine.updateMany({ where: { documentId }, data: regionFields(null) })
+	]);
+	await logOperation(document.bookId, 'UPDATE', `Removed ${document.file.filename} from ${document.formType} from ${document.issuer}`, [
+		{ entityType: 'TaxDocument', entityId: documentId, before: {}, after: {} }
+	]);
+}
+
+/** The attached file with its bytes, for serving or exporting. */
+export async function getDocumentFile(documentId: string) {
+	return db.taxDocumentFile.findUnique({ where: { documentId } });
+}
+
 export async function deleteDocumentLine(lineId: string) {
 	const existing = await db.taxDocumentLine.findUnique({ where: { id: lineId }, include: { document: true } });
 	if (!existing) throw new Error('Line not found');
@@ -175,6 +292,8 @@ export interface DocumentLineRef {
 	documentId: string;
 	formType: string;
 	issuer: string;
+	/** Business the document was filed under, for per-business schedules */
+	businessId: string | null;
 	box: string;
 	label: string;
 	amount: number;
@@ -192,7 +311,7 @@ export interface DocumentCategoryTotal {
 export async function getDocumentTotalsByCategory(bookId: string, year: number): Promise<Map<string, DocumentCategoryTotal>> {
 	const lines = await db.taxDocumentLine.findMany({
 		where: { taxCategoryId: { not: null }, document: { bookId, year, status: 'RECEIVED' } },
-		include: { document: { select: { id: true, formType: true, issuer: true } } },
+		include: { document: { select: { id: true, formType: true, issuer: true, businessId: true } } },
 		orderBy: [{ document: { formType: 'asc' } }, { box: 'asc' }]
 	});
 
@@ -206,6 +325,7 @@ export async function getDocumentTotalsByCategory(bookId: string, year: number):
 			documentId: line.document.id,
 			formType: line.document.formType,
 			issuer: line.document.issuer,
+			businessId: line.document.businessId,
 			box: line.box,
 			label: line.label,
 			amount
@@ -236,9 +356,13 @@ async function guessCategory(bookId: string, hints: string[]): Promise<string | 
 	return null;
 }
 
-function stripRelations<T extends { lines?: unknown; account?: unknown }>(doc: T): Omit<T, 'lines' | 'account'> {
+function stripRelations<T extends { lines?: unknown; account?: unknown; business?: unknown; file?: unknown }>(
+	doc: T
+): Omit<T, 'lines' | 'account' | 'business' | 'file'> {
 	const rest: Record<string, unknown> = { ...doc };
 	delete rest.lines;
 	delete rest.account;
-	return rest as Omit<T, 'lines' | 'account'>;
+	delete rest.business;
+	delete rest.file;
+	return rest as Omit<T, 'lines' | 'account' | 'business' | 'file'>;
 }

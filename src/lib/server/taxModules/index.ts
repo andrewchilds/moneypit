@@ -23,6 +23,27 @@ export function getModulesByGroup(group: TaxModule['group']): TaxModule[] {
 	return taxModules.filter((m) => m.group === group);
 }
 
+/** Extract the schedule a category belongs to: "Schedule C Line 8" -> "Schedule C". */
+export function scheduleOf(scheduleRef: string | null): string | null {
+	if (!scheduleRef) return null;
+	// "Schedule C", "Schedule 1", "Form 1120", "IT-201", "NJ-1040", "CA 540", "Schedule CA"
+	const match = scheduleRef.match(/^(Schedule (?:[A-Z]{1,2}|\d+)|Form \d+|[A-Z]{2}-?\d+|CA \d+)/);
+	return match ? match[1] : scheduleRef.split(' ')[0];
+}
+
+/** Schedules whose report sections are split per business (from perBusiness modules). */
+export function perBusinessSchedules(): Set<string> {
+	const schedules = new Set<string>();
+	for (const module of taxModules) {
+		if (!module.perBusiness) continue;
+		for (const cat of module.categories) {
+			const schedule = scheduleOf(cat.scheduleRef);
+			if (schedule) schedules.add(schedule);
+		}
+	}
+	return schedules;
+}
+
 /** Find a question by key across all modules, enabled or not. */
 export function findQuestion(key: string): { module: TaxModule; question: TaxQuestion } | undefined {
 	for (const module of taxModules) {

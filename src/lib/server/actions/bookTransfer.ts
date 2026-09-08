@@ -22,6 +22,12 @@ export interface BookExport {
 	// Added later; absent in older exports
 	taxDocuments?: ExportedTaxDocument[];
 	taxFacts?: ExportedTaxFact[];
+	businesses?: ExportedBusiness[];
+}
+
+interface ExportedBusiness {
+	id: string;
+	name: string;
 }
 
 interface ExportedTaxDocument {
@@ -31,19 +37,33 @@ interface ExportedTaxDocument {
 	issuer: string;
 	status: TaxDocumentStatus;
 	accountId: string | null;
+	businessId?: string | null;
 	notes: string | null;
 	lines: {
 		box: string;
 		label: string;
 		amount: string;
 		taxCategoryId: string | null;
+		// Added later; absent in older exports
+		page?: number | null;
+		x?: number | null;
+		y?: number | null;
+		w?: number | null;
+		h?: number | null;
 	}[];
+	// The attached form, base64-encoded. Added later; absent in older exports
+	file?: {
+		filename: string;
+		mimeType: string;
+		data: string;
+	} | null;
 }
 
 interface ExportedTaxFact {
 	year: number | null;
 	key: string;
 	value: unknown;
+	businessId?: string | null;
 }
 
 interface ExportedTaxCategory {
@@ -63,6 +83,7 @@ interface ExportedAccount {
 	last4: string | null;
 	openingBalance: string | null;
 	taxCategoryId: string | null;
+	businessId?: string | null;
 }
 
 interface ExportedRule {
@@ -120,8 +141,9 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 				}
 			},
 			taxModules: true,
-			taxDocuments: { include: { lines: true } },
-			taxFacts: true
+			taxDocuments: { include: { lines: true, file: true } },
+			taxFacts: true,
+			businesses: { orderBy: { createdAt: 'asc' } }
 		}
 	});
 
@@ -181,7 +203,8 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 			path: a.path,
 			last4: a.last4,
 			openingBalance: a.openingBalance?.toString() ?? null,
-			taxCategoryId: a.taxCategoryId
+			taxCategoryId: a.taxCategoryId,
+			businessId: a.businessId
 		})),
 		rules: book.rules.map((r) => ({
 			id: r.id,
@@ -217,15 +240,25 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 			issuer: d.issuer,
 			status: d.status,
 			accountId: d.accountId,
+			businessId: d.businessId,
 			notes: d.notes,
 			lines: d.lines.map((l) => ({
 				box: l.box,
 				label: l.label,
 				amount: l.amount.toString(),
-				taxCategoryId: l.taxCategoryId
-			}))
+				taxCategoryId: l.taxCategoryId,
+				page: l.page,
+				x: l.x,
+				y: l.y,
+				w: l.w,
+				h: l.h
+			})),
+			file: d.file
+				? { filename: d.file.filename, mimeType: d.file.mimeType, data: Buffer.from(d.file.data).toString('base64') }
+				: null
 		})),
-		taxFacts: book.taxFacts.map((f) => ({ year: f.year, key: f.key, value: f.value }))
+		taxFacts: book.taxFacts.map((f) => ({ year: f.year, key: f.key, value: f.value, businessId: f.businessId })),
+		businesses: book.businesses.map((b) => ({ id: b.id, name: b.name }))
 	};
 }
 
@@ -241,6 +274,7 @@ export interface ImportResult {
 	enabledModules: number;
 	taxDocuments: number;
 	taxFacts: number;
+	businesses: number;
 }
 
 export async function importBook(
@@ -273,6 +307,15 @@ export async function importBook(
 	const taxCategoryIdMap = new Map<string, string>();
 	const accountIdMap = new Map<string, string>();
 	const transactionIdMap = new Map<string, string>();
+	const businessIdMap = new Map<string, string>();
+
+	// 0. Create businesses
+	const businesses = data.businesses ?? [];
+	for (const b of businesses) {
+		const newBusiness = await db.business.create({ data: { bookId: newBook.id, name: b.name } });
+		businessIdMap.set(b.id, newBusiness.id);
+	}
+	const mapBusiness = (id: string | null | undefined) => (id ? (businessIdMap.get(id) ?? null) : null);
 
 	// 1. Create tax categories
 	for (const tc of data.taxCategories) {
@@ -299,7 +342,8 @@ export async function importBook(
 				path: a.path,
 				last4: a.last4,
 				openingBalance: a.openingBalance ? parseFloat(a.openingBalance) : null,
-				taxCategoryId: a.taxCategoryId ? taxCategoryIdMap.get(a.taxCategoryId) : null
+				taxCategoryId: a.taxCategoryId ? taxCategoryIdMap.get(a.taxCategoryId) : null,
+				businessId: mapBusiness(a.businessId)
 			}
 		});
 		accountIdMap.set(a.id, newAccount.id);
@@ -414,15 +458,33 @@ export async function importBook(
 				issuer: d.issuer,
 				status: d.status,
 				accountId: d.accountId ? (accountIdMap.get(d.accountId) ?? null) : null,
+				businessId: mapBusiness(d.businessId),
 				notes: d.notes,
 				lines: {
 					create: d.lines.map((l) => ({
 						box: l.box,
 						label: l.label,
 						amount: parseFloat(l.amount),
-						taxCategoryId: l.taxCategoryId ? (taxCategoryIdMap.get(l.taxCategoryId) ?? null) : null
+						taxCategoryId: l.taxCategoryId ? (taxCategoryIdMap.get(l.taxCategoryId) ?? null) : null,
+						page: l.page ?? null,
+						x: l.x ?? null,
+						y: l.y ?? null,
+						w: l.w ?? null,
+						h: l.h ?? null
 					}))
-				}
+				},
+				...(d.file
+					? {
+							file: {
+								create: {
+									filename: d.file.filename,
+									mimeType: d.file.mimeType,
+									data: Buffer.from(d.file.data, 'base64'),
+									size: Buffer.byteLength(d.file.data, 'base64')
+								}
+							}
+						}
+					: {})
 			}
 		});
 	}
@@ -430,7 +492,13 @@ export async function importBook(
 	const taxFacts = data.taxFacts ?? [];
 	for (const f of taxFacts) {
 		await db.taxFact.create({
-			data: { bookId: newBook.id, year: f.year, key: f.key, value: f.value as Prisma.InputJsonValue }
+			data: {
+				bookId: newBook.id,
+				year: f.year,
+				key: f.key,
+				value: f.value as Prisma.InputJsonValue,
+				businessId: mapBusiness(f.businessId)
+			}
 		});
 	}
 
@@ -439,6 +507,7 @@ export async function importBook(
 		bookName: newBook.name,
 		taxDocuments: taxDocuments.length,
 		taxFacts: taxFacts.length,
+		businesses: businesses.length,
 		taxCategories: data.taxCategories.length,
 		accounts: data.accounts.length,
 		rules: data.rules.length,

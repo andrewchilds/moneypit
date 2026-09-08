@@ -288,3 +288,263 @@ describe('Tax documents', () => {
 		deleteTestBook(importedId);
 	});
 });
+
+describe('Document files', () => {
+	interface DocumentFile {
+		id: string;
+		filename: string;
+		mimeType: string;
+		size: number;
+	}
+	interface DocumentWithFile extends TaxDocument {
+		file: DocumentFile | null;
+		lines: (TaxDocument['lines'][number] & { page: number | null; x: number | null })[];
+	}
+
+	let doc: TaxDocument;
+
+	beforeAll(() => {
+		doc = runMpJsonWithBook<TaxDocument>('doc:add --form 1099-int --issuer "Ally Bank" --year 2024', bookId);
+	});
+
+	it('attaches a PDF and reports it on the document', () => {
+		const file = runMpJsonWithBook<DocumentFile>(`doc:attach ${doc.id} test/fixtures/1099-int.pdf`, bookId);
+		expect(file.filename).toBe('1099-int.pdf');
+		expect(file.mimeType).toBe('application/pdf');
+		expect(file.size).toBeGreaterThan(1000);
+
+		const fetched = runMpJsonWithBook<DocumentWithFile>(`doc:get ${doc.id}`, bookId);
+		expect(fetched.file?.id).toBe(file.id);
+		// Bytes stay out of the listing
+		expect(JSON.stringify(fetched)).not.toContain('"data"');
+	});
+
+	it('replaces the file with an image, with a fresh id', () => {
+		const before = runMpJsonWithBook<DocumentWithFile>(`doc:get ${doc.id}`, bookId).file!;
+		const file = runMpJsonWithBook<DocumentFile>(`doc:attach ${doc.id} test/fixtures/1099-int.png`, bookId);
+		expect(file.mimeType).toBe('image/png');
+		expect(file.id).not.toBe(before.id);
+	});
+
+	it('rejects files that are not a PDF or image', () => {
+		const result = runMpWithBook(`doc:attach ${doc.id} test/fixtures/chase-checking.csv`, bookId);
+		expect(result.exitCode).not.toBe(0);
+		expect(result.stderr + result.stdout).toMatch(/Unsupported file type/);
+	});
+
+	it('carries the file and line regions through export and import', () => {
+		runMpJsonWithBook<DocumentLine>(`doc:line ${doc.id} --box 1 --amount 412.34`, bookId);
+		const file = `/tmp/moneypit-doc-file-${Date.now()}.json`;
+		runMpWithBook(`book:export ${file}`, bookId);
+		const { stdout } = runMpWithBook(`book:import ${file} --name "Doc File Import ${Date.now()}"`, bookId);
+		const importedId = stdout.match(/\(([a-z0-9]+)\)/)![1];
+		const docs = runMpJsonWithBook<DocumentWithFile[]>('doc:list --year 2024', importedId);
+		const imported = docs.find((d) => d.issuer === 'Ally Bank')!;
+		expect(imported.file?.filename).toBe('1099-int.png');
+		expect(imported.file?.size).toBe(runMpJsonWithBook<DocumentWithFile>(`doc:get ${doc.id}`, bookId).file!.size);
+		expect(imported.lines[0].box).toBe('1');
+		deleteTestBook(importedId);
+	});
+
+	it('detaches the file and clears line regions', () => {
+		expect(runMpWithBook(`doc:detach ${doc.id}`, bookId).stdout).toContain('Removed file');
+		const fetched = runMpJsonWithBook<DocumentWithFile>(`doc:get ${doc.id}`, bookId);
+		expect(fetched.file).toBeNull();
+		expect(fetched.lines.length).toBe(1);
+		expect(fetched.lines[0].page).toBeNull();
+		expect(runMpWithBook(`doc:detach ${doc.id}`, bookId).exitCode).not.toBe(0);
+	});
+
+	it('removes the file with the document', () => {
+		runMpJsonWithBook<DocumentFile>(`doc:attach ${doc.id} test/fixtures/1099-int.pdf`, bookId);
+		runMpWithBook(`doc:delete ${doc.id}`, bookId);
+		expect(runMpWithBook(`doc:get ${doc.id}`, bookId).exitCode).not.toBe(0);
+	});
+});
+
+describe('Businesses', () => {
+	interface Business {
+		id: string;
+		name: string;
+		accountCount: number;
+	}
+	interface BusinessDetail extends Business {
+		accounts: { id: string; path: string }[];
+	}
+	interface StatusWithBusinesses extends TaxYearStatus {
+		businesses: { id: string; name: string }[];
+		modules: (TaxYearStatus['modules'][number] & { businessId: string | null; businessName: string | null })[];
+		expectedDocuments: (TaxYearStatus['expectedDocuments'][number] & { businessId: string | null })[];
+	}
+	interface ReportWithBusinesses extends TaxReport {
+		sections: (TaxReport['sections'][number] & { key: string; businessId: string | null; businessName: string | null; unassigned: boolean })[];
+	}
+
+	let consulting: Account;
+	let ads: Account;
+	let betaSales: Account;
+	let alpha: Business;
+	let beta: Business;
+
+	const scheduleC = (report: ReportWithBusinesses) => report.sections.filter((s) => s.schedule === 'Schedule C');
+	const scheduleCModules = (status: StatusWithBusinesses) => status.modules.filter((m) => m.moduleId === 'us-schedule-c');
+
+	beforeAll(() => {
+		runMpWithBook('module:enable us-schedule-c', bookId);
+		const categories = runMpJsonWithBook<TaxCategory[]>('tax:list', bookId);
+		const receipts = categories.find((c) => c.name === 'Gross Receipts')!;
+		const advertising = categories.find((c) => c.name === 'Advertising')!;
+
+		consulting = runMpJsonWithBook<Account>(`account:create --type income --path "Consulting" --tax-category ${receipts.id}`, bookId);
+		ads = runMpJsonWithBook<Account>(`account:create --type expense --path "Ads" --tax-category ${advertising.id}`, bookId);
+		runMpWithBook(`tx:create --date 2025-02-01 --description "Client" --amount 1000 --debit ${checking.id} --credit ${consulting.id}`, bookId);
+		runMpWithBook(`tx:create --date 2025-03-01 --description "Google Ads" --amount 200 --debit ${ads.id} --credit ${checking.id}`, bookId);
+
+		// Answered while the book still had a single implicit business
+		runMpWithBook('fact:set business_owner taxpayer', bookId);
+	});
+
+	it('treats a book with no businesses as one Schedule C', () => {
+		const status = runMpJsonWithBook<StatusWithBusinesses>('tax:status --year 2025 --json', bookId);
+		expect(status.businesses).toEqual([]);
+		const modules = scheduleCModules(status);
+		expect(modules.length).toBe(1);
+		expect(modules[0].businessId).toBeNull();
+		expect(modules[0].questions.find((q) => q.key === 'business_owner')!.answer).toBe('taxpayer');
+
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		expect(scheduleC(report).length).toBe(1);
+		expect(scheduleC(report)[0].businessId).toBeNull();
+	});
+
+	it('first business adopts existing Schedule C accounts and answers', () => {
+		const { stdout } = runMpWithBook('business:create Alpha', bookId);
+		expect(stdout).toContain('Created business Alpha');
+		expect(stdout).toContain('Adopted 2 account(s) and 1 answer(s)');
+
+		alpha = runMpJsonWithBook<Business[]>('business:list', bookId)[0];
+		expect(alpha.name).toBe('Alpha');
+		expect(alpha.accountCount).toBe(2);
+
+		const detail = runMpJsonWithBook<BusinessDetail>('business:get Alpha', bookId);
+		expect(detail.accounts.map((a) => a.path).sort()).toEqual(['Ads', 'Consulting']);
+
+		const fact = runMpJsonWithBook<TaxFact>(`fact:get business_owner --year 2025 --business ${alpha.id}`, bookId);
+		expect(fact.value).toBe('taxpayer');
+	});
+
+	it('asks per-business questions once per business', () => {
+		const { stdout } = runMpWithBook('business:create Beta', bookId);
+		expect(stdout).not.toContain('Adopted');
+		beta = runMpJsonWithBook<Business[]>('business:list', bookId).find((b) => b.name === 'Beta')!;
+
+		runMpWithBook('fact:set business_owner spouse --business Beta', bookId);
+		const status = runMpJsonWithBook<StatusWithBusinesses>('tax:status --year 2025 --json', bookId);
+		const modules = scheduleCModules(status);
+		expect(modules.map((m) => m.businessName)).toEqual(['Alpha', 'Beta']);
+		expect(modules[0].questions.find((q) => q.key === 'business_owner')!.answer).toBe('taxpayer');
+		expect(modules[1].questions.find((q) => q.key === 'business_owner')!.answer).toBe('spouse');
+		// Book-level modules are still asked once
+		expect(status.modules.filter((m) => m.moduleId === 'us-personal-base').length).toBe(1);
+	});
+
+	it('requires a business for per-business questions once one exists', () => {
+		const { exitCode, stderr } = runMpWithBook('fact:set accounting_method cash', bookId);
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toContain('answered per business');
+
+		const wrong = runMpWithBook('fact:set filing_status mfj --year 2025 --business Alpha', bookId);
+		expect(wrong.exitCode).not.toBe(0);
+		expect(wrong.stderr).toContain('not a per-business question');
+	});
+
+	it('splits the Schedule C report by business', () => {
+		const categories = runMpJsonWithBook<TaxCategory[]>('tax:list', bookId);
+		const receipts = categories.find((c) => c.name === 'Gross Receipts')!;
+		betaSales = runMpJsonWithBook<Account>(
+			`account:create --type income --path "Beta Sales" --tax-category ${receipts.id} --business Beta`,
+			bookId
+		);
+		runMpWithBook(`tx:create --date 2025-04-01 --description "Sale" --amount 300 --debit ${checking.id} --credit ${betaSales.id}`, bookId);
+
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		const sections = scheduleC(report);
+		expect(sections.map((s) => s.businessName)).toEqual(['Alpha', 'Beta']);
+		expect(sections[0].totalIncome).toBe(1000);
+		expect(sections[0].expenseCategories.find((c) => c.taxCategoryName === 'Advertising')!.total).toBe(200);
+		expect(sections[1].totalIncome).toBe(300);
+		expect(sections[1].expenseCategories.length).toBe(0);
+		// Schedule B is not split
+		expect(report.sections.filter((s) => s.schedule === 'Schedule B').length).toBe(1);
+	});
+
+	it('flags Schedule C accounts with no business', () => {
+		runMpWithBook(`account:update ${betaSales.id} --business null`, bookId);
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		const unassigned = scheduleC(report).find((s) => s.unassigned)!;
+		expect(unassigned.businessId).toBeNull();
+		expect(unassigned.totalIncome).toBe(300);
+		expect(scheduleC(report).map((s) => s.businessName)).toEqual(['Alpha', null]);
+
+		runMpWithBook(`business:assign Beta ${betaSales.id}`, bookId);
+		expect(scheduleC(runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId)).some((s) => s.unassigned)).toBe(false);
+	});
+
+	it('expects and matches per-business documents', () => {
+		runMpWithBook('fact:set received_1099_nec yes --year 2025 --business Beta', bookId);
+		let status = runMpJsonWithBook<StatusWithBusinesses>('tax:status --year 2025 --json', bookId);
+		const expected = status.expectedDocuments.find((d) => d.formType === '1099-NEC')!;
+		expect(expected.businessId).toBe(beta.id);
+		expect(expected.status).toBe('missing');
+
+		// A 1099-NEC filed under the other business doesn't satisfy it
+		runMpJsonWithBook<TaxDocument>('doc:add --form 1099-NEC --issuer "Some Client" --year 2025 --business Alpha', bookId);
+		status = runMpJsonWithBook<StatusWithBusinesses>('tax:status --year 2025 --json', bookId);
+		expect(status.expectedDocuments.find((d) => d.formType === '1099-NEC')!.status).toBe('missing');
+
+		const doc = runMpJsonWithBook<TaxDocument & { business: { name: string } | null }>(
+			'doc:add --form 1099-NEC --issuer "Beta Client" --year 2025 --business Beta',
+			bookId
+		);
+		expect(doc.business?.name).toBe('Beta');
+		status = runMpJsonWithBook<StatusWithBusinesses>('tax:status --year 2025 --json', bookId);
+		expect(status.expectedDocuments.find((d) => d.formType === '1099-NEC')!.status).toBe('received');
+
+		// Its lines overlay only that business's section
+		runMpJsonWithBook<DocumentLine>(`doc:line ${doc.id} --box 1 --amount 350 --category "Gross Receipts"`, bookId);
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		const [alphaSection, betaSection] = scheduleC(report);
+		expect(alphaSection.incomeCategories.find((c) => c.taxCategoryName === 'Gross Receipts')!.documentTotal).toBeNull();
+		expect(betaSection.incomeCategories.find((c) => c.taxCategoryName === 'Gross Receipts')!.documentTotal).toBe(350);
+		expect(betaSection.reportedIncome).toBe(350);
+	});
+
+	it('round-trips businesses through export and import', () => {
+		const file = `/tmp/moneypit-businesses-${Date.now()}.json`;
+		runMpWithBook(`book:export ${file}`, bookId);
+		const { stdout } = runMpWithBook(`book:import ${file} --name "Business Import ${Date.now()}"`, bookId);
+		expect(stdout).toMatch(/Businesses: 2/);
+		const importedId = stdout.match(/\(([a-z0-9]+)\)/)![1];
+
+		const imported = runMpJsonWithBook<Business[]>('business:list', importedId);
+		expect(imported.map((b) => [b.name, b.accountCount])).toEqual([
+			['Alpha', 2],
+			['Beta', 1]
+		]);
+		const importedBeta = imported.find((b) => b.name === 'Beta')!;
+		expect(runMpJsonWithBook<TaxFact>(`fact:get business_owner --year 2025 --business ${importedBeta.id}`, importedId).value).toBe('spouse');
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', importedId);
+		expect(scheduleC(report).map((s) => s.businessName)).toEqual(['Alpha', 'Beta']);
+		deleteTestBook(importedId);
+	});
+
+	it('deleting a business unassigns its accounts and drops its answers', () => {
+		const { stdout } = runMpWithBook('business:delete Alpha', bookId);
+		expect(stdout).toContain('Deleted business Alpha');
+		expect(runMpJsonWithBook<Account & { businessId: string | null }>(`account:get ${consulting.id}`, bookId).businessId).toBeNull();
+		expect(runMpWithBook(`fact:get business_owner --year 2025 --business ${beta.id}`, bookId).exitCode).toBe(0);
+
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		expect(scheduleC(report).map((s) => s.businessName)).toEqual(['Beta', null]);
+	});
+});

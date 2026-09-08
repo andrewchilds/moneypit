@@ -5,6 +5,7 @@ export const usScheduleC: TaxModule = {
 	name: 'US Schedule C - Self Employment',
 	description: 'Business income and expenses for sole proprietors',
 	group: 'us-federal',
+	perBusiness: true,
 	categories: [
 		// Income
 		{ name: 'Gross Receipts', scheduleRef: 'Schedule C Line 1', description: 'Gross receipts or sales' },

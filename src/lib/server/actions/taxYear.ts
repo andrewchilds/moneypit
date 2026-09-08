@@ -22,15 +22,30 @@ export interface ExpectedDocument {
 	institution: string;
 	reason: string;
 	accountIds: string[];
+	/** Business the form belongs to, when expected because of a per-business answer */
+	businessId: string | null;
 	status: ExpectedDocumentStatus;
 	documentId: string | null;
 }
 
 export type TaxDocumentWithLines = Awaited<ReturnType<typeof listTaxDocuments>>[number];
 
+/**
+ * One questionnaire: a module's questions, for one business when the module
+ * is per-business and the book has businesses.
+ */
+export interface ModuleStatus {
+	moduleId: string;
+	name: string;
+	businessId: string | null;
+	businessName: string | null;
+	questions: QuestionStatus[];
+}
+
 export interface TaxYearStatus {
 	year: number;
-	modules: { moduleId: string; name: string; questions: QuestionStatus[] }[];
+	businesses: { id: string; name: string }[];
+	modules: ModuleStatus[];
 	documents: TaxDocumentWithLines[];
 	expectedDocuments: ExpectedDocument[];
 	openQuestions: number;
@@ -43,43 +58,78 @@ export interface TaxYearStatus {
  * documents the books suggest should exist.
  */
 export async function getTaxYearStatus(bookId: string, year: number): Promise<TaxYearStatus> {
-	const [enabled, facts, documents] = await Promise.all([
+	const [enabled, facts, documents, businesses] = await Promise.all([
 		getEnabledModules(bookId),
 		listTaxFacts(bookId, year),
-		listTaxDocuments(bookId, year)
+		listTaxDocuments(bookId, year),
+		db.business.findMany({ where: { bookId }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } })
 	]);
 
-	// Year-specific facts win over carry-forward facts
-	const factMap = new Map<string, { value: FactValue; year: number | null }>();
+	// Year-specific facts win over carry-forward facts. Keyed by business
+	// (null for book-level answers) then question key.
+	type Answer = { value: FactValue; year: number | null };
+	const factMaps = new Map<string | null, Map<string, Answer>>();
+	const answersFor = (businessId: string | null): Map<string, Answer> => {
+		let map = factMaps.get(businessId);
+		if (!map) {
+			map = new Map();
+			factMaps.set(businessId, map);
+		}
+		return map;
+	};
 	for (const fact of facts) {
-		const current = factMap.get(fact.key);
+		const map = answersFor(fact.businessId);
+		const current = map.get(fact.key);
 		if (!current || (current.year === null && fact.year === year)) {
-			factMap.set(fact.key, { value: fact.value as FactValue, year: fact.year });
+			map.set(fact.key, { value: fact.value as FactValue, year: fact.year });
 		}
 	}
 
-	const modules = enabled.map((e) => ({
-		moduleId: e.moduleId,
-		name: e.module.name,
-		questions: (e.module.questions ?? []).map((q): QuestionStatus => {
-			const fact = factMap.get(q.key);
-			const visible = !q.dependsOn || factMap.get(q.dependsOn.key)?.value === q.dependsOn.value;
+	// Per-business modules are asked once per business. A book with no
+	// businesses treats itself as one implicit business (businessId null).
+	const scopes: { businessId: string | null; businessName: string | null }[] =
+		businesses.length > 0
+			? businesses.map((b) => ({ businessId: b.id, businessName: b.name }))
+			: [{ businessId: null, businessName: null }];
+
+	const modules: ModuleStatus[] = enabled.flatMap((e) => {
+		const moduleScopes = e.module.perBusiness ? scopes : [{ businessId: null, businessName: null }];
+		return moduleScopes.map((scope) => {
+			const answers = answersFor(scope.businessId);
 			return {
-				...q,
 				moduleId: e.moduleId,
-				answer: fact?.value ?? null,
-				answered: fact !== undefined,
-				visible,
-				answerYear: fact?.year ?? null
+				name: e.module.name,
+				businessId: scope.businessId,
+				businessName: scope.businessName,
+				questions: (e.module.questions ?? []).map((q): QuestionStatus => {
+					const fact = answers.get(q.key);
+					const visible = !q.dependsOn || answers.get(q.dependsOn.key)?.value === q.dependsOn.value;
+					return {
+						...q,
+						moduleId: e.moduleId,
+						answer: fact?.value ?? null,
+						answered: fact !== undefined,
+						visible,
+						answerYear: fact?.year ?? null
+					};
+				})
 			};
-		})
-	}));
+		});
+	});
 
 	const expected = await inferExpectedDocuments(bookId, year);
-	for (const e of enabled) {
-		for (const rule of e.module.expectedDocuments ?? []) {
-			if (factMap.get(rule.whenFact.key)?.value === rule.whenFact.value) {
-				expected.push({ formType: rule.formType, institution: '', reason: rule.reason, accountIds: [] });
+	for (const m of modules) {
+		const module = enabled.find((e) => e.moduleId === m.moduleId)!.module;
+		const answers = answersFor(m.businessId);
+		for (const rule of module.expectedDocuments ?? []) {
+			if (answers.get(rule.whenFact.key)?.value === rule.whenFact.value) {
+				expected.push({
+					formType: rule.formType,
+					institution: '',
+					reason: m.businessName ? `${rule.reason} (${m.businessName})` : rule.reason,
+					accountIds: [],
+					businessId: m.businessId
+				});
 			}
 		}
 	}
@@ -96,12 +146,17 @@ export async function getTaxYearStatus(bookId: string, year: number): Promise<Ta
 	const openQuestions = modules.reduce((n, m) => n + m.questions.filter((q) => q.visible && !q.answered).length, 0);
 	const missingDocuments = expectedDocuments.filter((d) => d.status === 'missing').length;
 
-	return { year, modules, documents, expectedDocuments, openQuestions, missingDocuments };
+	return { year, businesses, modules, documents, expectedDocuments, openQuestions, missingDocuments };
 }
 
 type ExpectedDocumentDraft = Omit<ExpectedDocument, 'status' | 'documentId'>;
 
-function matchesInstitution(doc: { issuer: string; accountId: string | null }, exp: ExpectedDocumentDraft): boolean {
+function matchesInstitution(
+	doc: { issuer: string; accountId: string | null; businessId: string | null },
+	exp: ExpectedDocumentDraft
+): boolean {
+	// A document filed under a different business can't satisfy this expectation
+	if (exp.businessId && doc.businessId && doc.businessId !== exp.businessId) return false;
 	if (exp.accountIds.length > 0 && doc.accountId && exp.accountIds.includes(doc.accountId)) return true;
 	if (!exp.institution) return true;
 	const a = doc.issuer.toLowerCase();
@@ -142,7 +197,7 @@ async function inferExpectedDocuments(bookId: string, year: number): Promise<Exp
 		if (existing) {
 			if (!existing.accountIds.includes(accountId)) existing.accountIds.push(accountId);
 		} else {
-			drafts.set(key, { formType, institution, reason, accountIds: [accountId] });
+			drafts.set(key, { formType, institution, reason, accountIds: [accountId], businessId: null });
 		}
 	};
 

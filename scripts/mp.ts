@@ -13,10 +13,12 @@ import * as bookTransfer from "../src/lib/server/actions/bookTransfer";
 import * as taxDocuments from "../src/lib/server/actions/taxDocuments";
 import * as taxFacts from "../src/lib/server/actions/taxFacts";
 import * as taxYear from "../src/lib/server/actions/taxYear";
+import * as businesses from "../src/lib/server/actions/businesses";
 import { getTaxReportData } from "../src/lib/server/actions/reports";
 import { FORM_PRESETS } from "../src/lib/taxForms";
 import { readConfig, writeConfig, getConfigPath, updateConfig } from "../src/lib/server/config";
 import * as fs from "fs";
+import * as path from "path";
 import { CLI_HELP } from "../src/lib/cli-help";
 import { getAllModules, getModule, findQuestion } from "../src/lib/server/taxModules";
 
@@ -123,6 +125,22 @@ function resolveYear(opts: Record<string, string | boolean>): number {
 	return new Date().getFullYear() - 1;
 }
 
+/**
+ * --business <id|name> resolved to an id. Undefined when not passed, null
+ * for "null"/"none" (clear the assignment).
+ */
+async function resolveBusinessOpt(bookId: string, opts: Record<string, string | boolean>): Promise<string | null | undefined> {
+	const raw = opts.business;
+	if (raw === undefined) return undefined;
+	if (raw === true || raw === "") throw new Error("--business needs a business id or name");
+	if (raw === "null" || raw === "none") return null;
+	return (await businesses.resolveBusiness(bookId, raw)).id;
+}
+
+function scopeLabel(m: { name: string; businessName: string | null }): string {
+	return m.businessName ? `${m.name} — ${m.businessName}` : m.name;
+}
+
 function money(n: number): string {
 	return `$${n.toFixed(2)}`;
 }
@@ -217,8 +235,10 @@ async function main() {
 			if (opts.prefix) filter.pathPrefix = opts.prefix as string;
 			const accountList = await accounts.listAccounts(bookId, filter);
 			if (opts.condensed) {
+				const businessNames = new Map((await businesses.listBusinesses(bookId)).map((b) => [b.id, b.name]));
 				for (const account of accountList) {
-					console.log(`${account.id}\t${account.type}\t${account.path}`);
+					const business = account.businessId ? `\t[${businessNames.get(account.businessId) ?? "?"}]` : "";
+					console.log(`${account.id}\t${account.type}\t${account.path}${business}`);
 				}
 			} else {
 				json(accountList);
@@ -239,11 +259,15 @@ async function main() {
 			const bookId = await resolveBookId(opts);
 			const type = opts.type as string;
 			const path = opts.path as string;
-			if (!type || !path) throw new Error("Usage: account:create --type <type> --path <path> [--last4 <digits>] [--asset-type <type>]");
+			if (!type || !path)
+				throw new Error(
+					"Usage: account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]"
+				);
 			const account = await accounts.createAccount(bookId, parseAccountType(type), path, {
 				taxCategoryId: opts["tax-category"] as string | undefined,
 				last4: opts["last4"] as string | undefined,
-				assetType: opts["asset-type"] ? (parseAssetType(opts["asset-type"] as string) ?? undefined) : undefined
+				assetType: opts["asset-type"] ? (parseAssetType(opts["asset-type"] as string) ?? undefined) : undefined,
+				businessId: (await resolveBusinessOpt(bookId, opts)) ?? undefined
 			});
 			json(account);
 			break;
@@ -253,7 +277,7 @@ async function main() {
 			const id = positional[0];
 			if (!id)
 				throw new Error(
-					"Usage: account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>]"
+					"Usage: account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--business <id|name>]"
 				);
 			const data: {
 				path?: string;
@@ -261,8 +285,14 @@ async function main() {
 				openingBalance?: number | null;
 				last4?: string | null;
 				assetType?: AssetType | null;
+				businessId?: string | null;
 			} = {};
 			if (opts.path) data.path = opts.path as string;
+			if (opts.business !== undefined) {
+				const existing = await accounts.getAccount(id);
+				if (!existing) throw new Error(`Account not found: ${id}`);
+				data.businessId = await resolveBusinessOpt(existing.bookId, opts);
+			}
 			if (opts["asset-type"] !== undefined) data.assetType = parseAssetType(opts["asset-type"] as string);
 			if (opts["tax-category"] !== undefined) {
 				data.taxCategoryId = opts["tax-category"] === "null" ? null : (opts["tax-category"] as string);
@@ -518,13 +548,16 @@ async function main() {
 				const formType = opts.form as string;
 				const issuer = opts.issuer as string;
 				if (!formType || !issuer) {
-					throw new Error("Usage: doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--notes <text>] [--na]");
+					throw new Error(
+						"Usage: doc:add --form <type> --issuer <name> [--year <year>] [--account <id>] [--business <id|name>] [--notes <text>] [--na]"
+					);
 				}
 				const doc = await taxDocuments.createTaxDocument(bookId, {
 					year: resolveYear(opts),
 					formType,
 					issuer,
 					accountId: opts.account as string | undefined,
+					businessId: await resolveBusinessOpt(bookId, opts),
 					notes: opts.notes as string | undefined,
 					status: opts.na ? "NOT_APPLICABLE" : "RECEIVED"
 				});
@@ -534,8 +567,16 @@ async function main() {
 
 			case "doc:update": {
 				const id = positional[0];
-				if (!id) throw new Error("Usage: doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--notes <text>] [--status received|na]");
+				if (!id)
+					throw new Error(
+						"Usage: doc:update <id> [--issuer <name>] [--form <type>] [--account <id>] [--business <id|name>] [--notes <text>] [--status received|na]"
+					);
 				const data: taxDocuments.UpdateTaxDocumentData = {};
+				if (opts.business !== undefined) {
+					const existing = await taxDocuments.getTaxDocument(id);
+					if (!existing) throw new Error(`Document not found: ${id}`);
+					data.businessId = await resolveBusinessOpt(existing.bookId, opts);
+				}
 				if (opts.issuer) data.issuer = opts.issuer as string;
 				if (opts.form) data.formType = opts.form as string;
 				if (opts.account !== undefined) data.accountId = opts.account === "null" ? null : (opts.account as string);
@@ -581,6 +622,29 @@ async function main() {
 				break;
 			}
 
+			case "doc:attach": {
+				const id = positional[0];
+				const filePath = positional[1];
+				if (!id || !filePath) throw new Error("Usage: doc:attach <doc-id> <file>");
+				const data = new Uint8Array(fs.readFileSync(filePath));
+				const filename = path.basename(filePath);
+				const file = await taxDocuments.attachDocumentFile(id, {
+					filename,
+					mimeType: taxDocuments.documentFileType(filename),
+					data
+				});
+				json(file);
+				break;
+			}
+
+			case "doc:detach": {
+				const id = positional[0];
+				if (!id) throw new Error("Usage: doc:detach <doc-id>");
+				await taxDocuments.detachDocumentFile(id);
+				console.log(`Removed file from document ${id}`);
+				break;
+			}
+
 			case "doc:forms": {
 				for (const [formType, preset] of Object.entries(FORM_PRESETS)) {
 					console.log(`${formType}  ${preset.name}`);
@@ -599,7 +663,7 @@ async function main() {
 				console.log(`Tax year ${year}`);
 				const seen = new Set<string>();
 				for (const module of status.modules) {
-					console.log(`\n${module.name}`);
+					console.log(`\n${scopeLabel(module)}`);
 					for (const q of module.questions) {
 						seen.add(q.key);
 						if (!q.visible) continue;
@@ -612,9 +676,11 @@ async function main() {
 				const facts = await taxFacts.listTaxFacts(bookId, year);
 				const other = facts.filter((f) => !seen.has(f.key));
 				if (other.length > 0) {
+					const businessNames = new Map(status.businesses.map((b) => [b.id, b.name]));
 					console.log("\nOther facts");
 					for (const f of other) {
-						console.log(`  ${f.key.padEnd(28)} = ${formatFactValue(f.value)}${f.year === null ? " (carry-forward)" : ""}`);
+						const scope = f.businessId ? ` (${businessNames.get(f.businessId) ?? "?"})` : "";
+						console.log(`  ${f.key.padEnd(28)}${scope} = ${formatFactValue(f.value)}${f.year === null ? " (carry-forward)" : ""}`);
 					}
 				}
 				break;
@@ -623,8 +689,8 @@ async function main() {
 			case "fact:get": {
 				const bookId = await resolveBookId(opts);
 				const key = positional[0];
-				if (!key) throw new Error("Usage: fact:get <key> [--year <year>]");
-				const fact = await taxFacts.getTaxFact(bookId, resolveYear(opts), key);
+				if (!key) throw new Error("Usage: fact:get <key> [--year <year>] [--business <id|name>]");
+				const fact = await taxFacts.getTaxFact(bookId, resolveYear(opts), key, (await resolveBusinessOpt(bookId, opts)) ?? null);
 				if (!fact) throw new Error(`Fact not set: ${key}`);
 				json(fact);
 				break;
@@ -634,20 +700,27 @@ async function main() {
 				const bookId = await resolveBookId(opts);
 				const key = positional[0];
 				const raw = positional.slice(1).join(" ");
-				if (!key || raw === "") throw new Error("Usage: fact:set <key> <value> [--year <year>] [--carry-forward]");
+				if (!key || raw === "") throw new Error("Usage: fact:set <key> <value> [--year <year>] [--carry-forward] [--business <id|name>]");
 				const question = findQuestion(key)?.question;
 				const value = taxFacts.parseFactValue(raw, question?.type, question?.options);
 				const year = opts["carry-forward"] ? null : resolveYear(opts);
-				const fact = await taxFacts.setTaxFact(bookId, key, value, year);
-				console.log(`Set ${key} = ${formatFactValue(fact.value)}${fact.year === null ? " (carry-forward)" : ` for ${fact.year}`}`);
+				const businessId = (await resolveBusinessOpt(bookId, opts)) ?? null;
+				const fact = await taxFacts.setTaxFact(bookId, key, value, year, businessId);
+				const business = businessId ? ` (${(await businesses.getBusiness(businessId))?.name})` : "";
+				console.log(`Set ${key}${business} = ${formatFactValue(fact.value)}${fact.year === null ? " (carry-forward)" : ` for ${fact.year}`}`);
 				break;
 			}
 
 			case "fact:delete": {
 				const bookId = await resolveBookId(opts);
 				const key = positional[0];
-				if (!key) throw new Error("Usage: fact:delete <key> [--year <year>] [--carry-forward]");
-				await taxFacts.deleteTaxFact(bookId, key, opts["carry-forward"] ? null : resolveYear(opts));
+				if (!key) throw new Error("Usage: fact:delete <key> [--year <year>] [--carry-forward] [--business <id|name>]");
+				await taxFacts.deleteTaxFact(
+					bookId,
+					key,
+					opts["carry-forward"] ? null : resolveYear(opts),
+					(await resolveBusinessOpt(bookId, opts)) ?? null
+				);
 				console.log(`Deleted fact ${key}`);
 				break;
 			}
@@ -662,10 +735,14 @@ async function main() {
 					break;
 				}
 				console.log(`Tax year ${year}`);
+				if (status.businesses.length > 0) {
+					console.log(`Businesses: ${status.businesses.map((b) => b.name).join(", ")}`);
+				}
 				console.log(`\nOpen questions: ${status.openQuestions}`);
 				for (const module of status.modules) {
+					const tag = module.businessName ? `${module.moduleId} · ${module.businessName}` : module.moduleId;
 					for (const q of module.questions) {
-						if (q.visible && !q.answered) console.log(`  [${module.moduleId}] ${q.key}: ${q.prompt}`);
+						if (q.visible && !q.answered) console.log(`  [${tag}] ${q.key}: ${q.prompt}`);
 					}
 				}
 				const received = status.expectedDocuments.filter((d) => d.status === "received").length;
@@ -690,6 +767,79 @@ async function main() {
 				json(await getTaxReportData(bookId, resolveYear(opts)));
 				break;
 			}
+
+		// === BUSINESS COMMANDS ===
+		case "business:list": {
+			const bookId = await resolveBookId(opts);
+			const list = await businesses.listBusinesses(bookId);
+			if (opts.condensed) {
+				for (const b of list) console.log(`${b.id}\t${b.name}\t${b.accountCount} account(s)`);
+			} else {
+				json(list);
+			}
+			break;
+		}
+
+		case "business:get": {
+			const bookId = await resolveBookId(opts);
+			const idOrName = positional[0];
+			if (!idOrName) throw new Error("Usage: business:get <id|name>");
+			const business = await businesses.resolveBusiness(bookId, idOrName);
+			const accountList = (await accounts.listAccounts(bookId)).filter((a) => a.businessId === business.id);
+			json({ ...business, accounts: accountList.map((a) => ({ id: a.id, type: a.type, path: a.path })) });
+			break;
+		}
+
+		case "business:create": {
+			const bookId = await resolveBookId(opts);
+			const name = positional.join(" ");
+			if (!name) throw new Error("Usage: business:create <name>");
+			const result = await businesses.createBusiness(bookId, name);
+			if (opts.json) {
+				json(result);
+				break;
+			}
+			console.log(`Created business ${result.business.name} (${result.business.id})`);
+			if (result.adoptedAccounts > 0 || result.adoptedFacts > 0) {
+				console.log(
+					`Adopted ${result.adoptedAccounts} account(s) and ${result.adoptedFacts} answer(s) that belonged to the book's single implicit business`
+				);
+			}
+			break;
+		}
+
+		case "business:update": {
+			const bookId = await resolveBookId(opts);
+			const idOrName = positional[0];
+			if (!idOrName || !opts.name) throw new Error("Usage: business:update <id|name> --name <name>");
+			const business = await businesses.resolveBusiness(bookId, idOrName);
+			json(await businesses.updateBusiness(business.id, { name: opts.name as string }));
+			break;
+		}
+
+		case "business:delete": {
+			const bookId = await resolveBookId(opts);
+			const idOrName = positional[0];
+			if (!idOrName) throw new Error("Usage: business:delete <id|name>");
+			const business = await businesses.resolveBusiness(bookId, idOrName);
+			await businesses.deleteBusiness(business.id);
+			console.log(`Deleted business ${business.name}; its accounts and documents are now unassigned`);
+			break;
+		}
+
+		case "business:assign": {
+			const bookId = await resolveBookId(opts);
+			const [idOrName, ...accountIds] = positional;
+			if (!idOrName || accountIds.length === 0) throw new Error("Usage: business:assign <id|name> <account-ids...>");
+			const business = await businesses.resolveBusiness(bookId, idOrName);
+			for (const accountId of accountIds) {
+				const account = await accounts.getAccount(accountId);
+				if (!account || account.bookId !== bookId) throw new Error(`Account not found: ${accountId}`);
+				await accounts.updateAccount(accountId, { businessId: business.id });
+				console.log(`${account.path} -> ${business.name}`);
+			}
+			break;
+		}
 
 		// === RULE COMMANDS ===
 		case "rule:list": {
@@ -1050,6 +1200,8 @@ async function main() {
 			console.log(`  Enabled Modules: ${result.enabledModules}`);
 			console.log(`  Tax Documents: ${result.taxDocuments}`);
 			console.log(`  Tax Facts: ${result.taxFacts}`);
+			console.log(`  Businesses: ${result.businesses}`);
+			console.log(`  Businesses: ${result.businesses}`);
 			break;
 		}
 

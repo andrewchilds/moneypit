@@ -45,6 +45,26 @@ model Book {
   operationLogs OperationLog[]
   taxDocuments  TaxDocument[]
   taxFacts      TaxFact[]
+  businesses    Business[]
+}
+
+// A sole-proprietor business within a book. Tax modules marked perBusiness
+// (Schedule C) ask their questions once per business, and the tax report
+// shows a section per business built from the accounts assigned to it.
+model Business {
+  id        String   @id @default(cuid())
+  bookId    String
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  name      String   // "Darla's design work", "Pennant Cards"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts     Account[]
+  taxFacts     TaxFact[]
+  taxDocuments TaxDocument[]
+
+  @@unique([bookId, name])
+  @@index([bookId])
 }
 
 model Account {
@@ -58,6 +78,8 @@ model Account {
   openingBalance Decimal?    @db.Decimal(12, 2) // Starting balance before any transactions
   taxCategoryId  String?
   taxCategory    TaxCategory? @relation(fields: [taxCategoryId], references: [id])
+  businessId     String?     // Which business this account belongs to, for per-business schedules
+  business       Business?   @relation(fields: [businessId], references: [id], onDelete: SetNull)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -161,13 +183,29 @@ model TaxDocument {
   status    TaxDocumentStatus @default(RECEIVED)
   accountId String?           // Account the form reports on, if any
   account   Account?          @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  businessId String?          // Business the form belongs to (1099-NEC, 1099-K)
+  business  Business?         @relation(fields: [businessId], references: [id], onDelete: SetNull)
   notes     String?
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
   lines TaxDocumentLine[]
+  file  TaxDocumentFile?
 
   @@index([bookId, year])
+}
+
+// The scanned or downloaded form itself (PDF or image), kept in the database
+// so backups and book exports carry it. One file per document.
+model TaxDocumentFile {
+  id         String      @id @default(cuid())
+  documentId String      @unique
+  document   TaxDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  filename   String
+  mimeType   String      // "application/pdf", "image/png", "image/jpeg"
+  size       Int
+  data       Bytes
+  createdAt  DateTime    @default(now())
 }
 
 model TaxDocumentLine {
@@ -179,6 +217,13 @@ model TaxDocumentLine {
   amount        Decimal      @db.Decimal(12, 2)
   taxCategoryId String?
   taxCategory   TaxCategory? @relation(fields: [taxCategoryId], references: [id], onDelete: SetNull)
+  // Where on the attached file the figure was read from: 1-based page and a
+  // rectangle as fractions of the page size, so it renders at any zoom.
+  page          Int?
+  x             Float?
+  y             Float?
+  w             Float?
+  h             Float?
   createdAt     DateTime     @default(now())
 
   @@index([documentId])
@@ -188,18 +233,21 @@ model TaxDocumentLine {
 // A fact about a tax year that doesn't map to a transaction: filing status,
 // whether an extension was filed, Roth basis, property use. Keys come from
 // the questions declared by enabled tax modules, but any key is allowed.
-// year is null for facts that carry forward across years.
+// year is null for facts that carry forward across years. businessId is set
+// for answers to per-business module questions (one answer per business).
 model TaxFact {
-  id        String   @id @default(cuid())
-  bookId    String
-  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
-  year      Int?
-  key       String
-  value     Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String    @id @default(cuid())
+  bookId     String
+  book       Book      @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  year       Int?
+  key        String
+  value      Json
+  businessId String?
+  business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
-  @@unique([bookId, year, key])
+  @@unique([bookId, year, key, businessId])
   @@index([bookId])
 }
 
