@@ -372,7 +372,8 @@ async function main() {
 				amount: parseFloat(amount),
 				memo: opts.memo as string | undefined,
 				debitAccountId: opts.debit as string | undefined,
-				creditAccountId: opts.credit as string | undefined
+				creditAccountId: opts.credit as string | undefined,
+				status: opts.debit && opts.credit ? "CATEGORIZED" : "PENDING"
 			});
 			json(tx);
 			break;

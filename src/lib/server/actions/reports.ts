@@ -301,7 +301,8 @@ export interface TaxReportData {
 	// Open items from the tax year questionnaire and expected documents
 	openQuestions: number;
 	missingDocuments: number;
-	// Received document lines with no tax category, so they appear nowhere above
+	// Received document lines with a non-zero amount and no tax category, so
+	// they appear nowhere above. Zero boxes are informational and skipped.
 	unmappedDocumentLines: number;
 }
 
@@ -535,7 +536,9 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		getDocumentTotalsByCategory(bookId, year),
 		getTaxYearStatus(bookId, year),
 		db.taxCategory.findMany({ where: { bookId } }),
-		db.taxDocumentLine.count({ where: { taxCategoryId: null, document: { bookId, year, status: 'RECEIVED' } } })
+		db.taxDocumentLine.count({
+			where: { taxCategoryId: null, amount: { not: 0 }, document: { bookId, year, status: 'RECEIVED' } }
+		})
 	]);
 
 	// Get transaction totals per account for the year.
