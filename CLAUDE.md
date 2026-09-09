@@ -295,11 +295,11 @@ npx prisma studio  # Database GUI
 
 ### Driving the App in a Browser
 
-Unit and e2e tests cover the CLI, not the web UI. To look at actual pages (verify a UI change, read a report), drive the running dev server with `scripts/driver.py` and look at the screenshot or table output:
+Unit and e2e tests cover the CLI, not the web UI. To look at actual pages (verify a UI change, read a report), drive the running dev server with `scripts/driver.py` and look at the screenshot or table output. It needs a Python environment with Playwright installed (`pip install playwright && playwright install chromium`):
 
 ```bash
-/Users/andrew/Projects/local-python-env/bin/python scripts/driver.py            # dashboard screenshot
-/Users/andrew/Projects/local-python-env/bin/python scripts/driver.py steps.txt  # run a step file
+python scripts/driver.py            # dashboard screenshot
+python scripts/driver.py steps.txt  # run a step file
 ```
 
 A step file is one command per line, e.g.:

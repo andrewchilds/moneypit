@@ -5,14 +5,15 @@ Unit and e2e tests cover the CLI, not the web UI. This is the harness for
 looking at the actual pages — checking a report, verifying a UI change, or
 reading numbers off a screen.
 
-Run it with the Playwright-equipped Python env:
+Run it with a Python env that has Playwright installed
+(`pip install playwright && playwright install chromium`):
 
-    /Users/andrew/Projects/local-python-env/bin/python scripts/driver.py
+    python scripts/driver.py
 
 By default it loads the dashboard and writes one screenshot. Pass a *script* —
 a file of one-command-per-line steps — to drive further:
 
-    /Users/andrew/Projects/local-python-env/bin/python scripts/driver.py steps.txt
+    python scripts/driver.py steps.txt
 
 Step commands (blank lines and `#` comments ignored):
 

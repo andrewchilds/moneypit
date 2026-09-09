@@ -55,7 +55,7 @@ model Business {
   id        String   @id @default(cuid())
   bookId    String
   book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
-  name      String   // "Darla's design work", "Pennant Cards"
+  name      String   // "Freelance design", "Etsy shop"
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
