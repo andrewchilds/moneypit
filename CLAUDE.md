@@ -245,6 +245,22 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   shows it beside the book total with the variance, and uses it in totals.
   Categories with document figures but no accounts (1099-B capital gains) still
   appear. Lines on `NOT_APPLICABLE` documents are ignored.
+  How much of the book total a document replaces depends on its account
+  (`--account` on `doc:add`): a document tied to an account replaces only the
+  book total of transactions whose other side is that account (dividends that
+  landed in that brokerage account), or the account itself when the document
+  points at the income/expense account (a 1098 on `Mortgage:Interest`); book
+  totals from other accounts stay, so a 1099-DIV from one broker leaves the
+  dividends recorded from another in place. A document with no account
+  replaces the whole category. On expense categories, a document whose
+  account has no transactions in the category also replaces the category (a
+  1098's real estate taxes box). The report's "Reported" column is the book
+  total less what documents replaced plus the document figures; expanding the
+  category shows the replaced amount as its own row when it is partial.
+  On `/tax/<year>` and in `tax:status`, each received document tied to an
+  account gets a reconciliation line per mapped box: the book figure for that
+  account and category, the document figure, the difference, and a status of
+  matched (within $0.01), variance, or no transactions.
   The form itself (PDF or image) can be attached to a document
   (`doc:attach`, or the drop area when adding one on `/tax/<year>`). It is
   stored in the database, so backups and book exports carry it. Opening a

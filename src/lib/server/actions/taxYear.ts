@@ -2,6 +2,7 @@ import { db } from '../db';
 import { getEnabledModules } from './taxModules';
 import { listTaxFacts } from './taxFacts';
 import { listTaxDocuments } from './taxDocuments';
+import { getTaxAccountTotals, bookFigureForAccount, type OverlayRow } from './taxTotals';
 import type { FactValue, TaxQuestion } from '../taxModules';
 
 export interface QuestionStatus extends TaxQuestion {
@@ -30,6 +31,29 @@ export interface ExpectedDocument {
 
 export type TaxDocumentWithLines = Awaited<ReturnType<typeof listTaxDocuments>>[number];
 
+export type ReconciliationStatus = 'matched' | 'variance' | 'no_transactions';
+
+/**
+ * A document line compared to the books: the figure the document reports
+ * for its account and category against the transactions of that account
+ * in that category.
+ */
+export interface DocumentReconciliation {
+	documentId: string;
+	lineId: string;
+	box: string;
+	label: string;
+	taxCategoryId: string;
+	taxCategoryName: string;
+	accountId: string;
+	accountPath: string;
+	bookAmount: number;
+	documentAmount: number;
+	/** document minus books */
+	difference: number;
+	status: ReconciliationStatus;
+}
+
 /**
  * One questionnaire: a module's questions, for one business when the module
  * is per-business and the book has businesses.
@@ -48,6 +72,8 @@ export interface TaxYearStatus {
 	modules: ModuleStatus[];
 	documents: TaxDocumentWithLines[];
 	expectedDocuments: ExpectedDocument[];
+	/** One per mapped line of each received document tied to an account */
+	reconciliations: DocumentReconciliation[];
 	openQuestions: number;
 	missingDocuments: number;
 }
@@ -58,11 +84,12 @@ export interface TaxYearStatus {
  * documents the books suggest should exist.
  */
 export async function getTaxYearStatus(bookId: string, year: number): Promise<TaxYearStatus> {
-	const [enabled, facts, documents, businesses] = await Promise.all([
+	const [enabled, facts, documents, businesses, reconciliations] = await Promise.all([
 		getEnabledModules(bookId),
 		listTaxFacts(bookId, year),
 		listTaxDocuments(bookId, year),
-		db.business.findMany({ where: { bookId }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } })
+		db.business.findMany({ where: { bookId }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } }),
+		reconcileDocuments(bookId, year)
 	]);
 
 	// Year-specific facts win over carry-forward facts. Keyed by business
@@ -146,7 +173,63 @@ export async function getTaxYearStatus(bookId: string, year: number): Promise<Ta
 	const openQuestions = modules.reduce((n, m) => n + m.questions.filter((q) => q.visible && !q.answered).length, 0);
 	const missingDocuments = expectedDocuments.filter((d) => d.status === 'missing').length;
 
-	return { year, businesses, modules, documents, expectedDocuments, openQuestions, missingDocuments };
+	return { year, businesses, modules, documents, expectedDocuments, reconciliations, openQuestions, missingDocuments };
+}
+
+/**
+ * Compare each received document tied to an account with the books: for
+ * every mapped line, the transactions of that account in the line's category.
+ */
+export async function reconcileDocuments(bookId: string, year: number): Promise<DocumentReconciliation[]> {
+	const [documents, totals, accounts] = await Promise.all([
+		db.taxDocument.findMany({
+			where: { bookId, year, status: 'RECEIVED', accountId: { not: null } },
+			include: {
+				account: { select: { id: true, path: true } },
+				lines: { where: { taxCategoryId: { not: null } }, include: { taxCategory: { select: { id: true, name: true } } }, orderBy: { box: 'asc' } }
+			},
+			orderBy: [{ formType: 'asc' }, { issuer: 'asc' }]
+		}),
+		getTaxAccountTotals(bookId, year),
+		db.account.findMany({ where: { bookId, type: { in: ['INCOME', 'EXPENSE'] } }, select: { id: true, taxCategoryId: true } })
+	]);
+
+	// Counterparty rows of every account, grouped by the account's category
+	const categoryOf = new Map(accounts.map((a) => [a.id, a.taxCategoryId]));
+	const rowsByCategory = new Map<string, OverlayRow[]>();
+	for (const t of totals) {
+		const categoryId = categoryOf.get(t.accountId);
+		if (!categoryId) continue;
+		const rows = rowsByCategory.get(categoryId) ?? [];
+		rows.push({ accountId: t.accountId, counterpartyId: t.counterpartyId, total: t.total });
+		rowsByCategory.set(categoryId, rows);
+	}
+
+	const result: DocumentReconciliation[] = [];
+	for (const doc of documents) {
+		if (!doc.account) continue;
+		for (const line of doc.lines) {
+			if (!line.taxCategory) continue;
+			const book = bookFigureForAccount(rowsByCategory.get(line.taxCategory.id) ?? [], doc.account.id);
+			const documentAmount = Number(line.amount);
+			const difference = Math.round((documentAmount - book.amount) * 100) / 100;
+			result.push({
+				documentId: doc.id,
+				lineId: line.id,
+				box: line.box,
+				label: line.label,
+				taxCategoryId: line.taxCategory.id,
+				taxCategoryName: line.taxCategory.name,
+				accountId: doc.account.id,
+				accountPath: doc.account.path,
+				bookAmount: book.amount,
+				documentAmount,
+				difference,
+				status: !book.hasRows ? 'no_transactions' : Math.abs(difference) < 0.01 ? 'matched' : 'variance'
+			});
+		}
+	}
+	return result;
 }
 
 type ExpectedDocumentDraft = Omit<ExpectedDocument, 'status' | 'documentId'>;

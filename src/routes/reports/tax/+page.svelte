@@ -262,7 +262,7 @@
 						<th>Category</th>
 						{#if section.hasDocuments}
 							<th class="amount">Per Books</th>
-							<th class="amount">Per Documents</th>
+							<th class="amount">Reported</th>
 							<th class="amount">Variance</th>
 						{:else}
 							<th class="amount">Amount</th>
@@ -292,11 +292,9 @@
 								{/if}
 							</td>
 							{#if section.hasDocuments}
-								<td class="amount" class:superseded={category.documentTotal !== null}>{formatCurrencyPrecise(category.total)}</td>
+								<td class="amount" class:superseded={category.documentTotal !== null && Math.abs(category.bookReplaced - category.total) < 0.005}>{formatCurrencyPrecise(category.total)}</td>
 								<td class="amount">
-									{#if category.documentTotal !== null}
-										{formatCurrencyPrecise(category.documentTotal)}
-									{:else if category.worksheets.length > 0}
+									{#if category.documentTotal !== null || category.worksheets.length > 0}
 										{formatCurrencyPrecise(category.reportedTotal)}
 									{:else}
 										—
@@ -311,6 +309,14 @@
 						</tr>
 						{#if expandedCategories.has(key)}
 							{@render accountRows(category, key, 1, section.hasDocuments ? 2 : 0)}
+							{#if category.documentTotal !== null && category.bookReplaced !== 0 && Math.abs(category.bookReplaced - category.total) >= 0.005}
+								<tr class="account-row replaced-row">
+									<td></td>
+									<td class="account-path">Book figure replaced by the documents below</td>
+									<td class="amount">{formatCurrencyPrecise(-category.bookReplaced)}</td>
+									{#if section.hasDocuments}<td></td><td></td>{/if}
+								</tr>
+							{/if}
 							{@render worksheetRows(category, 1, section.hasDocuments ? 2 : 0)}
 							{#each category.documentLines as line (line.lineId)}
 								<tr class="account-row document-line">
@@ -852,6 +858,11 @@
 
 	.total-row {
 		background: var(--color-bg-alt);
+	}
+
+	.replaced-row .account-path {
+		font-size: 12px;
+		font-style: italic;
 	}
 
 	.superseded {

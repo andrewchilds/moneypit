@@ -295,6 +295,8 @@ export interface DocumentLineRef {
 	issuer: string;
 	/** Business the document was filed under, for per-business schedules */
 	businessId: string | null;
+	/** Account the document was issued for; its figures replace only that account's share of the books */
+	accountId: string | null;
 	box: string;
 	label: string;
 	amount: number;
@@ -312,7 +314,7 @@ export interface DocumentCategoryTotal {
 export async function getDocumentTotalsByCategory(bookId: string, year: number): Promise<Map<string, DocumentCategoryTotal>> {
 	const lines = await db.taxDocumentLine.findMany({
 		where: { taxCategoryId: { not: null }, document: { bookId, year, status: 'RECEIVED' } },
-		include: { document: { select: { id: true, formType: true, issuer: true, businessId: true } } },
+		include: { document: { select: { id: true, formType: true, issuer: true, businessId: true, accountId: true } } },
 		orderBy: [{ document: { formType: 'asc' } }, { box: 'asc' }]
 	});
 
@@ -328,6 +330,7 @@ export async function getDocumentTotalsByCategory(bookId: string, year: number):
 			formType: line.document.formType,
 			issuer: line.document.issuer,
 			businessId: line.document.businessId,
+			accountId: line.document.accountId,
 			box: line.box,
 			label: line.label,
 			amount

@@ -760,6 +760,16 @@ async function main() {
 				for (const doc of status.documents) {
 					const total = doc.lines.reduce((sum, l) => sum + Number(l.amount), 0);
 					console.log(`  ${doc.id}  ${doc.formType.padEnd(9)} ${doc.issuer.padEnd(20)} ${doc.status}  ${doc.lines.length} line(s)  ${money(total)}`);
+					for (const r of status.reconciliations.filter((r) => r.documentId === doc.id)) {
+						const label = r.status === "matched" ? "matched " : r.status === "variance" ? "VARIANCE" : "NO TXNS ";
+						console.log(
+							`      ${label}  box ${r.box.padEnd(4)} ${r.taxCategoryName.padEnd(30)} ${r.accountPath.padEnd(24)} books ${money(r.bookAmount).padStart(11)}  doc ${money(r.documentAmount).padStart(11)}  diff ${money(r.difference).padStart(11)}`
+						);
+					}
+				}
+				const untied = status.documents.filter((d) => d.status === "RECEIVED" && !d.accountId && d.lines.length > 0);
+				if (untied.length > 0) {
+					console.log(`\nNot tied to an account (their lines replace whole categories): ${untied.map((d) => `${d.formType} ${d.issuer}`).join(", ")}`);
 				}
 				break;
 			}

@@ -4,6 +4,7 @@ import type { AssetType, AccountType } from '@prisma/client';
 import { getDocumentTotalsByCategory, type DocumentLineRef } from './taxDocuments';
 import { getTaxYearStatus } from './taxYear';
 import { getEnabledModules } from './taxModules';
+import { getTaxAccountTotals, overlayDocumentFigures, type OverlayRow } from './taxTotals';
 import { perBusinessSchedules, scheduleOf } from '../taxModules';
 import type { FactValue, WorksheetBreakdownRow, WorksheetLine } from '../taxModules';
 
@@ -246,6 +247,12 @@ export interface TaxCategoryTotal {
 	/** Total per received tax documents mapped to this category, if any */
 	documentTotal: number | null;
 	documentLines: DocumentLineRef[];
+	/**
+	 * How much of `total` the documents replace. A document tied to an
+	 * account replaces only that account's share; one with no account
+	 * replaces the whole total.
+	 */
+	bookReplaced: number;
 	/** Figures computed by module worksheets (home office), added to the reported total */
 	worksheets: WorksheetRef[];
 	computedTotal: number;
@@ -686,42 +693,9 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		getEnabledModules(bookId)
 	]);
 
-	// Get transaction totals per account for the year.
-	// Income accounts are normally credited and expense accounts debited, but
-	// refunds and reversals land on the opposite side, so net the two directions.
-	// Money earned inside a retirement account (dividends in an IRA, for example)
-	// is not taxable income, so transactions whose other side is a
-	// ROTH_RETIREMENT or TAX_DEFERRED asset account are excluded.
-	// The excluded amount is returned per account too, so the report can show
-	// where a figure differs from a plain sum of the account's transactions.
-	const accountTotals = await db.$queryRaw<{ accountId: string; total: number; excluded: number }[]>`
-		SELECT
-			signed."accountId",
-			COALESCE(SUM(signed.amount) FILTER (WHERE NOT signed.retirement), 0) as total,
-			COALESCE(SUM(signed.amount) FILTER (WHERE signed.retirement), 0) as excluded
-		FROM (
-			SELECT
-				a.id as "accountId",
-				CASE
-					WHEN a.type = 'INCOME' AND t."creditAccountId" = a.id THEN t.amount
-					WHEN a.type = 'EXPENSE' AND t."debitAccountId" = a.id THEN t.amount
-					ELSE -t.amount
-				END as amount,
-				COALESCE(other."assetType"::text IN ('ROTH_RETIREMENT', 'TAX_DEFERRED'), false) as retirement
-			FROM "Account" a
-			JOIN "Transaction" t ON (t."debitAccountId" = a.id OR t."creditAccountId" = a.id)
-			LEFT JOIN "Account" other ON other.id = CASE
-				WHEN t."debitAccountId" = a.id THEN t."creditAccountId"
-				ELSE t."debitAccountId"
-			END
-			WHERE a."bookId" = ${bookId}
-			AND a.type IN ('INCOME', 'EXPENSE')
-			AND t.date >= ${startDate}
-			AND t.date <= ${endDate}
-			AND t."merged_into_id" IS NULL
-		) signed
-		GROUP BY signed."accountId"
-	`;
+	// Transaction totals per account for the year, split by counterparty so a
+	// document tied to one asset account can replace just that account's share.
+	const counterpartyTotals = await getTaxAccountTotals(bookId, year);
 
 	// Income credited from retirement accounts, reported separately so the
 	// exclusion above is visible rather than silent.
@@ -739,12 +713,16 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	`;
 	const retirementIncomeExcluded = Number(retirementRows[0]?.total ?? 0);
 
-	// Build a map of account id -> total
+	// Per-account totals and the counterparty rows behind them
 	const totalMap = new Map<string, number>();
 	const excludedMap = new Map<string, number>();
-	for (const row of accountTotals) {
-		totalMap.set(row.accountId, Number(row.total));
-		excludedMap.set(row.accountId, Number(row.excluded));
+	const rowsByAccount = new Map<string, OverlayRow[]>();
+	for (const row of counterpartyTotals) {
+		totalMap.set(row.accountId, (totalMap.get(row.accountId) ?? 0) + row.total);
+		excludedMap.set(row.accountId, (excludedMap.get(row.accountId) ?? 0) + row.excluded);
+		const rows = rowsByAccount.get(row.accountId) ?? [];
+		rows.push({ accountId: row.accountId, counterpartyId: row.counterpartyId, total: row.total });
+		rowsByAccount.set(row.accountId, rows);
 	}
 
 	// Categories that should be excluded from deductible totals
@@ -801,6 +779,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 					total: 0,
 					documentTotal: null,
 					documentLines: [],
+					bookReplaced: 0,
 					worksheets: [],
 					computedTotal: 0,
 					reportedTotal: 0,
@@ -844,9 +823,12 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 			const scope = key.startsWith('*|') ? null : key.slice(0, key.indexOf('|'));
 			const docs = cat.taxCategoryId ? documentsFor(cat.taxCategoryId, scope) : null;
 			if (docs) {
+				const rows = cat.accounts.flatMap((a) => rowsByAccount.get(a.id) ?? []);
+				const overlay = overlayDocumentFigures(accountType, rows, docs.lines);
 				cat.documentTotal = docs.total;
 				cat.documentLines = docs.lines;
-				cat.reportedTotal = docs.total;
+				cat.bookReplaced = overlay.bookReplaced;
+				cat.reportedTotal = overlay.reportedTotal;
 			}
 		}
 
@@ -1012,6 +994,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 						total: 0,
 						documentTotal: null,
 						documentLines: [],
+						bookReplaced: 0,
 						worksheets: [],
 						computedTotal: 0,
 						reportedTotal: 0,

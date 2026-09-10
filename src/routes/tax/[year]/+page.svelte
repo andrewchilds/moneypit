@@ -104,6 +104,9 @@
 
 	const documentTotal = (doc: PageData["status"]["documents"][number]) =>
 		doc.lines.reduce((sum, l) => sum + l.amount, 0);
+
+	const reconciliationsOf = (documentId: string) => data.status.reconciliations.filter((r) => r.documentId === documentId);
+	const reconciliationLabel = { matched: "Matched", variance: "Variance", no_transactions: "No transactions" } as const;
 </script>
 
 <div class="tax-prep-page">
@@ -448,6 +451,22 @@
 						</form>
 					</div>
 				</header>
+
+				{#if reconciliationsOf(doc.id).length > 0}
+					<ul class="reconciliation">
+						{#each reconciliationsOf(doc.id) as r (r.lineId)}
+							<li class="reconcile-line status-{r.status}">
+								<span class="reconcile-what">Box {r.box} · {r.taxCategoryName} · {r.accountPath}</span>
+								<span class="reconcile-figures">
+									books <strong class="mono">{formatCurrency(r.bookAmount)}</strong>
+									· document <strong class="mono">{formatCurrency(r.documentAmount)}</strong>
+									· difference <strong class="mono">{formatCurrency(r.difference)}</strong>
+								</span>
+								<span class="status status-{r.status}">{reconciliationLabel[r.status]}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
 
 				{#if doc.lines.length > 0}
 					<table class="table lines">
@@ -881,6 +900,64 @@
 
 	.status-not_applicable {
 		background: var(--color-bg-alt);
+		color: var(--color-text-muted);
+	}
+
+	.status-matched {
+		background: var(--color-success-light);
+		color: var(--color-success);
+	}
+
+	.status-variance {
+		background: var(--color-danger-light);
+		color: var(--color-danger);
+	}
+
+	.status-no_transactions {
+		background: var(--color-warning-light);
+		color: var(--color-text);
+	}
+
+	.reconciliation {
+		list-style: none;
+		margin: var(--spacing-sm) 0 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		font-size: 13px;
+	}
+
+	.reconcile-line {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--spacing-sm);
+		padding: 4px var(--spacing-sm);
+		border-radius: var(--radius-sm);
+		background: var(--color-bg-alt);
+	}
+
+	.reconcile-line.status-variance {
+		background: var(--color-danger-light);
+		color: var(--color-text);
+	}
+
+	.reconcile-line.status-no_transactions {
+		background: var(--color-warning-light);
+	}
+
+	.reconcile-line.status-matched {
+		background: var(--color-bg-alt);
+		color: var(--color-text);
+	}
+
+	.reconcile-what {
+		flex: 1;
+		min-width: 200px;
+	}
+
+	.reconcile-figures {
 		color: var(--color-text-muted);
 	}
 
