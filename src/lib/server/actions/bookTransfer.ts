@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { findQuestion } from '../taxModules';
 import type { AccountType, AssetType, TransactionStatus, TaxDocumentStatus, Prisma } from '@prisma/client';
 
 // Export format version for future compatibility
@@ -489,6 +490,12 @@ export async function importBook(
 		});
 	}
 
+	// Answers that list account ids point at the new book's accounts
+	const mapFactValue = (key: string, value: unknown): unknown => {
+		if (findQuestion(key)?.question.type !== 'accounts' || !Array.isArray(value)) return value;
+		return value.map((id) => (typeof id === 'string' ? (accountIdMap.get(id) ?? id) : id));
+	};
+
 	const taxFacts = data.taxFacts ?? [];
 	for (const f of taxFacts) {
 		await db.taxFact.create({
@@ -496,7 +503,7 @@ export async function importBook(
 				bookId: newBook.id,
 				year: f.year,
 				key: f.key,
-				value: f.value as Prisma.InputJsonValue,
+				value: mapFactValue(f.key, f.value) as Prisma.InputJsonValue,
 				businessId: mapBusiness(f.businessId)
 			}
 		});

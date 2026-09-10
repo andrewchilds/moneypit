@@ -73,6 +73,7 @@ BUSINESSES (one Schedule C each; accounts, answers, and documents belong to one)
 TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
   tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
+  worksheet:list [--year <year>] [--business <id|name>]   Print module worksheets (home office) with their math
   fact:list [--year <year>]             Questions from enabled modules with their answers
   fact:set <key> <value> [--year <year>] [--carry-forward] [--business <id|name>]
   fact:get <key> [--year <year>] [--business <id|name>]

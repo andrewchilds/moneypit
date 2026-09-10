@@ -180,6 +180,7 @@ BUSINESSES (one Schedule C each; accounts, answers, and documents belong to one)
 TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
   tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
+  worksheet:list [--year <year>] [--business <id|name>]   Module worksheets (home office) with their math
   fact:list [--year <year>]             Questions from enabled modules with their answers
   fact:set <key> <value> [--year <year>] [--carry-forward] [--business <id|name>]
   fact:get <key> [--year <year>] [--business <id|name>]
@@ -277,6 +278,29 @@ Schedule C. A **Business** is a named record the following attach to:
 A book with no businesses behaves as if it had exactly one. Creating the
 first business adopts the existing Schedule C accounts and answers, so
 nothing changes until a second business is added and accounts are moved.
+
+### Worksheets
+
+A module can declare `worksheets` (`TaxWorksheet` in
+`src/lib/server/taxModules/types.ts`): a computation over facts and book
+figures that produces figures keyed by tax category name, with a breakdown
+of the math for display. Worksheets on a `perBusiness` module run once per
+business. The tax report adds each output to its category in the right
+section (creating the category row if the books have nothing there), tags it
+"Computed", and expanding the row shows the breakdown; `reportedTotal` for
+the section includes it, and `tax:report` JSON carries the outputs under
+`worksheets`. `bin/mp worksheet:list [--year] [--business]` prints them.
+
+`us-schedule-c` has the home office worksheet (Schedule C Line 30). Inputs
+are the per-business answers `home_office`, `home_office_sqft`,
+`home_total_sqft`, and `home_office_accounts`, a question of type `accounts`
+listing the whole-home expense accounts (rent, utilities, insurance) to
+allocate; the prep page renders it as a multi-select of EXPENSE accounts and
+`fact:set home_office_accounts <id,id,...> --business <b>` takes ids. Each
+account's year total (the same figure as on the report) is multiplied by
+office ÷ total square footage. The sum is limited to the business's reported
+income less its other Schedule C expenses (Form 8829's gross income limit);
+the remainder is shown as a carryover. Depreciation is not computed.
 
 On the tax report (`/reports/tax?year=YYYY`) every figure can be traced:
 a category expands to its accounts and document lines, an account expands to

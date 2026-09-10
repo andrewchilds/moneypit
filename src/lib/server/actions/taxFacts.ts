@@ -50,6 +50,15 @@ async function checkBusinessScope(bookId: string, key: string, businessId: strin
 	}
 }
 
+/** An `accounts` answer must list accounts of this book. */
+async function checkAccountIds(bookId: string, value: FactValue): Promise<void> {
+	if (!Array.isArray(value)) throw new Error('Expected a list of account ids');
+	const found = await db.account.findMany({ where: { bookId, id: { in: value } }, select: { id: true } });
+	const known = new Set(found.map((a) => a.id));
+	const missing = value.filter((id) => !known.has(id));
+	if (missing.length > 0) throw new Error(`Account not found in this book: ${missing.join(', ')}`);
+}
+
 function describe(key: string, year: number | null, business: { name: string } | null): string {
 	return `${key}${business ? ` (${business.name})` : ''}${year ? ` for ${year}` : ''}`;
 }
@@ -68,6 +77,7 @@ export async function setTaxFact(
 	const question = findQuestion(key)?.question;
 	const effectiveYear = question?.carryForward ? null : year;
 	await checkBusinessScope(bookId, key, businessId);
+	if (question?.type === 'accounts') await checkAccountIds(bookId, value);
 
 	const existing = await db.taxFact.findFirst({
 		where: { bookId, key, year: effectiveYear, businessId },
@@ -140,6 +150,11 @@ export function parseFactValue(raw: string, type?: TaxQuestionType, options?: { 
 		}
 		case 'text':
 			return trimmed;
+		case 'accounts': {
+			const ids = trimmed.split(/[\s,]+/).filter(Boolean);
+			if (ids.length === 0) throw new Error('Expected one or more account ids');
+			return ids;
+		}
 		default: {
 			if (['true', 'false'].includes(trimmed.toLowerCase())) return trimmed.toLowerCase() === 'true';
 			const n = Number(trimmed);

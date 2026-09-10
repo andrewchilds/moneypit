@@ -89,11 +89,16 @@
 		return String(q.answer);
 	}
 
+	const expenseAccounts = $derived(data.accounts.filter((a) => a.type === "EXPENSE"));
+	const accountPath = (id: string) => data.accounts.find((a) => a.id === id)?.path ?? id;
+	const answeredAccounts = (q: Question): string[] => (Array.isArray(q.answer) ? q.answer : []);
+
 	function displayAnswer(q: Question): string {
 		if (q.answer === null) return "";
 		if (q.type === "boolean") return q.answer ? "Yes" : "No";
 		if (q.type === "choice") return q.options?.find((o) => o.value === q.answer)?.label ?? String(q.answer);
 		if (q.type === "amount") return formatCurrency(Number(q.answer));
+		if (q.type === "accounts") return answeredAccounts(q).map(accountPath).join(", ");
 		return String(q.answer);
 	}
 
@@ -305,6 +310,12 @@
 									/>
 								{:else if q.type === "date"}
 									<input id="q-{q.key}-{scope}" type="date" name="value" value={formatAnswer(q)} />
+								{:else if q.type === "accounts"}
+									<select id="q-{q.key}-{scope}" name="value" multiple size={Math.min(8, Math.max(4, expenseAccounts.length))} class="accounts-select">
+										{#each expenseAccounts as a (a.id)}
+											<option value={a.id} selected={answeredAccounts(q).includes(a.id)}>{a.path}</option>
+										{/each}
+									</select>
 								{:else}
 									<input id="q-{q.key}-{scope}" type="text" name="value" value={formatAnswer(q)} />
 								{/if}
@@ -802,6 +813,11 @@
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
 		font-size: 14px;
+	}
+
+	.question-input .accounts-select {
+		width: 320px;
+		font-size: 13px;
 	}
 
 	.current {

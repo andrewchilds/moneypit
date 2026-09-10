@@ -4,12 +4,18 @@ export type {
 	TaxQuestion,
 	TaxQuestionType,
 	FactValue,
-	FactExpectedDocument
+	FactExpectedDocument,
+	TaxWorksheet,
+	WorksheetInput,
+	WorksheetAccountFigure,
+	WorksheetLine,
+	WorksheetBreakdownRow,
+	WorksheetResult
 } from './types';
 export { taxModules } from './modules';
 
 import { taxModules } from './modules';
-import type { TaxModule, TaxQuestion } from './types';
+import type { TaxModule, TaxQuestion, TaxWorksheet } from './types';
 
 export function getModule(moduleId: string): TaxModule | undefined {
 	return taxModules.find((m) => m.id === moduleId);
@@ -42,6 +48,15 @@ export function perBusinessSchedules(): Set<string> {
 		}
 	}
 	return schedules;
+}
+
+/** Find a worksheet by id across all modules, enabled or not. */
+export function findWorksheet(worksheetId: string): { module: TaxModule; worksheet: TaxWorksheet } | undefined {
+	for (const module of taxModules) {
+		const worksheet = module.worksheets?.find((w) => w.id === worksheetId);
+		if (worksheet) return { module, worksheet };
+	}
+	return undefined;
 }
 
 /** Find a question by key across all modules, enabled or not. */

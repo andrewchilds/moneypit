@@ -30,7 +30,8 @@
 	// Transactions behind each account figure, fetched when the row is opened
 	let accountDetails = $state<Record<string, AccountDetail | { error: string }>>({});
 
-	const isExpandable = (category: Category) => category.accounts.length > 0 || category.documentLines.length > 0;
+	const isExpandable = (category: Category) =>
+		category.accounts.length > 0 || category.documentLines.length > 0 || category.worksheets.length > 0;
 
 	async function toggleAccount(key: string, accountId: string) {
 		if (expandedAccounts.has(key)) {
@@ -286,19 +287,31 @@
 									{/if}
 								{/if}
 								{category.taxCategoryName}
+								{#if category.worksheets.length > 0}
+									<span class="source-tag" title="From the {category.worksheets.map((w) => w.name).join(', ')} worksheet">Computed</span>
+								{/if}
 							</td>
 							{#if section.hasDocuments}
 								<td class="amount" class:superseded={category.documentTotal !== null}>{formatCurrencyPrecise(category.total)}</td>
-								<td class="amount">{category.documentTotal !== null ? formatCurrencyPrecise(category.documentTotal) : "—"}</td>
-								<td class="amount variance" class:nonzero={category.documentTotal !== null && Math.abs(category.documentTotal - category.total) >= 0.01}>
-									{category.documentTotal !== null ? formatCurrencyPrecise(category.documentTotal - category.total) : "—"}
+								<td class="amount">
+									{#if category.documentTotal !== null}
+										{formatCurrencyPrecise(category.documentTotal)}
+									{:else if category.worksheets.length > 0}
+										{formatCurrencyPrecise(category.reportedTotal)}
+									{:else}
+										—
+									{/if}
+								</td>
+								<td class="amount variance" class:nonzero={(category.documentTotal !== null || category.worksheets.length > 0) && Math.abs(category.reportedTotal - category.total) >= 0.01}>
+									{category.documentTotal !== null || category.worksheets.length > 0 ? formatCurrencyPrecise(category.reportedTotal - category.total) : "—"}
 								</td>
 							{:else}
-								<td class="amount">{formatCurrencyPrecise(category.total)}</td>
+								<td class="amount">{formatCurrencyPrecise(category.reportedTotal)}</td>
 							{/if}
 						</tr>
 						{#if expandedCategories.has(key)}
 							{@render accountRows(category, key, 1, section.hasDocuments ? 2 : 0)}
+							{@render worksheetRows(category, 1, section.hasDocuments ? 2 : 0)}
 							{#each category.documentLines as line (line.lineId)}
 								<tr class="account-row document-line">
 									<td></td>
@@ -325,7 +338,7 @@
 							<td class="amount"><strong>{formatCurrencyPrecise(reportedTotal)}</strong></td>
 							<td class="amount"><strong>{formatCurrencyPrecise(reportedTotal - bookTotal)}</strong></td>
 						{:else}
-							<td class="amount"><strong>{formatCurrencyPrecise(bookTotal)}</strong></td>
+							<td class="amount"><strong>{formatCurrencyPrecise(reportedTotal)}</strong></td>
 						{/if}
 					</tr>
 				</tbody>
@@ -379,6 +392,37 @@
 			{/if}
 		</section>
 	{/each}
+
+	<!-- The math behind a worksheet figure on a category -->
+	{#snippet worksheetRows(category: Category, lead: number, trail: number)}
+		{#each category.worksheets as sheet (sheet.worksheetId)}
+			<tr class="account-row worksheet-line">
+				{#each blanks(lead) as i (i)}<td></td>{/each}
+				<td class="account-path"><span class="worksheet-name">{sheet.name}</span></td>
+				<td class="amount">{formatCurrencyPrecise(sheet.amount)}</td>
+				{#each blanks(trail) as i (i)}<td></td>{/each}
+			</tr>
+			{#each sheet.breakdown as row, i (i)}
+				<tr class="tx-row worksheet-step" class:worksheet-result={row.kind === "result"} class:worksheet-carryover={row.kind === "carryover"}>
+					{#each blanks(lead) as i (i)}<td></td>{/each}
+					<td class="tx-cell worksheet-cell" class:worksheet-allocation={row.kind === "allocation"}>
+						<span class="tx-desc">{row.label}</span>
+						{#if row.detail}<span class="tx-other">{row.detail}</span>{/if}
+					</td>
+					<td class="amount">
+						{#if row.amount === null}
+							—
+						{:else if row.kind === "input"}
+							{row.label.includes("percentage") ? `${row.amount}%` : row.amount.toLocaleString("en-US")}
+						{:else}
+							{formatCurrencyPrecise(row.amount)}
+						{/if}
+					</td>
+					{#each blanks(trail) as i (i)}<td></td>{/each}
+				</tr>
+			{/each}
+		{/each}
+	{/snippet}
 
 	<!-- A category in a two-column table (name, amount) with the same drill-down -->
 	{#snippet simpleCategoryRow(category: Category, key: string)}
@@ -827,6 +871,35 @@
 	.box-label {
 		margin-left: var(--spacing-xs);
 		font-size: 12px;
+		color: var(--color-text-muted);
+	}
+
+	.source-tag {
+		padding: 1px 6px;
+		font-size: 11px;
+		font-weight: 500;
+		border-radius: var(--radius-sm);
+		background: var(--color-info-light);
+		color: var(--color-text);
+	}
+
+	.worksheet-name {
+		color: var(--color-text);
+	}
+
+	.worksheet-cell {
+		grid-template-columns: minmax(0, 1fr) auto;
+	}
+
+	.worksheet-allocation {
+		padding-left: calc(var(--spacing-xl) * 2 + var(--spacing-md)) !important;
+	}
+
+	.worksheet-result {
+		font-weight: 600;
+	}
+
+	.worksheet-carryover .amount {
 		color: var(--color-text-muted);
 	}
 

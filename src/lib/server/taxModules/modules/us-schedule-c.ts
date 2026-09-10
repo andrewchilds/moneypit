@@ -1,4 +1,77 @@
-import type { TaxModule } from '../types';
+import type { FactValue, TaxModule, TaxWorksheet, WorksheetBreakdownRow } from '../types';
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+function asNumber(value: FactValue | undefined): number | null {
+	if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+	if (typeof value === 'string' && value.trim() !== '') {
+		const n = Number(value);
+		return Number.isFinite(n) ? n : null;
+	}
+	return null;
+}
+
+function asAccountIds(value: FactValue | undefined): string[] {
+	if (Array.isArray(value)) return value;
+	if (typeof value === 'string') return value.split(',').map((s) => s.trim()).filter(Boolean);
+	return [];
+}
+
+/**
+ * Form 8829, simplified: the office's share of whole-home costs, limited to
+ * the business's gross income less its other expenses. No depreciation.
+ */
+export const homeOfficeWorksheet: TaxWorksheet = {
+	id: 'home-office',
+	name: 'Business use of home',
+	description: 'Allocates whole-home costs to the office by square footage, limited to the gross income of the business (Form 8829)',
+	facts: ['home_office', 'home_office_sqft', 'home_total_sqft', 'home_office_accounts'],
+	compute({ facts, accounts, section }) {
+		if (facts.home_office !== true) return null;
+		const office = asNumber(facts.home_office_sqft);
+		const total = asNumber(facts.home_total_sqft);
+		if (office === null || total === null || office <= 0 || total <= 0) return null;
+
+		const ratio = Math.min(1, office / total);
+		const breakdown: WorksheetBreakdownRow[] = [
+			{ label: 'Office square footage', amount: office, kind: 'input' },
+			{ label: 'Total home square footage', amount: total, kind: 'input' },
+			{ label: 'Business use percentage', detail: `${office} ÷ ${total}`, amount: round2(ratio * 100), kind: 'input' }
+		];
+
+		let allowable = 0;
+		for (const id of asAccountIds(facts.home_office_accounts)) {
+			const account = accounts.find((a) => a.id === id);
+			if (!account) continue;
+			const allocated = round2(account.total * ratio);
+			allowable = round2(allowable + allocated);
+			breakdown.push({
+				label: account.path,
+				detail: `${round2(ratio * 100)}% of ${account.total.toFixed(2)}`,
+				amount: allocated,
+				kind: 'allocation'
+			});
+		}
+		breakdown.push({ label: 'Allowable home expenses', amount: allowable, kind: 'subtotal' });
+
+		const limit = Math.max(0, round2(section.income - section.expenses));
+		breakdown.push({
+			label: 'Gross income limit',
+			detail: `${section.income.toFixed(2)} income less ${section.expenses.toFixed(2)} other expenses`,
+			amount: limit,
+			kind: 'limit'
+		});
+
+		const deduction = Math.min(allowable, limit);
+		const carryover = round2(allowable - deduction);
+		breakdown.push({ label: 'Home office deduction (Schedule C Line 30)', amount: deduction, kind: 'result' });
+		if (carryover > 0) {
+			breakdown.push({ label: 'Disallowed, carried over to next year', amount: carryover, kind: 'carryover' });
+		}
+
+		return { lines: [{ category: 'Home Office', amount: deduction }], breakdown };
+	}
+};
 
 export const usScheduleC: TaxModule = {
 	id: 'us-schedule-c',
@@ -97,6 +170,13 @@ export const usScheduleC: TaxModule = {
 			dependsOn: { key: 'home_office', value: true }
 		},
 		{
+			key: 'home_office_accounts',
+			prompt: 'Whole-home expense accounts to allocate to the office',
+			description: 'Rent, utilities, insurance: the office share of each year total goes on Schedule C Line 30',
+			type: 'accounts',
+			dependsOn: { key: 'home_office', value: true }
+		},
+		{
 			key: 'sep_contribution',
 			prompt: 'SEP or solo 401(k) employer contribution for this year',
 			type: 'amount',
@@ -106,5 +186,6 @@ export const usScheduleC: TaxModule = {
 	expectedDocuments: [
 		{ formType: '1099-NEC', whenFact: { key: 'received_1099_nec', value: true }, reason: 'Client reported nonemployee compensation' },
 		{ formType: '1099-K', whenFact: { key: 'received_1099_k', value: true }, reason: 'Payment processor reported card receipts' }
-	]
+	],
+	worksheets: [homeOfficeWorksheet]
 };

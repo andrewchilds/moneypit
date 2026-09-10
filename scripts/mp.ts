@@ -148,6 +148,7 @@ function money(n: number): string {
 function formatFactValue(value: unknown): string {
 	if (typeof value === "boolean") return value ? "yes" : "no";
 	if (typeof value === "number") return String(value);
+	if (Array.isArray(value)) return value.join(", ");
 	return String(value);
 }
 
@@ -766,6 +767,30 @@ async function main() {
 			case "tax:report": {
 				const bookId = await resolveBookId(opts);
 				json(await getTaxReportData(bookId, resolveYear(opts)));
+				break;
+			}
+
+			case "worksheet:list": {
+				const bookId = await resolveBookId(opts);
+				const year = resolveYear(opts);
+				const businessId = (await resolveBusinessOpt(bookId, opts)) ?? null;
+				const report = await getTaxReportData(bookId, year);
+				const sheets = report.worksheets.filter((w) => !businessId || w.businessId === businessId);
+				if (opts.json) {
+					json(sheets);
+					break;
+				}
+				console.log(`Worksheets for ${year}`);
+				if (sheets.length === 0) console.log("  (none: no enabled module worksheet has the facts it needs)");
+				for (const w of sheets) {
+					console.log(`\n${w.name}${w.businessName ? ` — ${w.businessName}` : ""}  [${w.worksheetId}]`);
+					for (const row of w.breakdown) {
+						const amount = row.amount === null ? "" : row.kind === "input" ? String(row.amount) : money(row.amount);
+						const label = row.detail ? `${row.label} (${row.detail})` : row.label;
+						console.log(`  ${(row.kind === "allocation" ? "  " : "") + label.padEnd(60)} ${amount.padStart(14)}`);
+					}
+					for (const line of w.lines) console.log(`  → ${line.category}: ${money(line.amount)}`);
+				}
 				break;
 			}
 

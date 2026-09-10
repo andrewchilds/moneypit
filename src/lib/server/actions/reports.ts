@@ -3,7 +3,9 @@ import { Prisma } from '@prisma/client';
 import type { AssetType, AccountType } from '@prisma/client';
 import { getDocumentTotalsByCategory, type DocumentLineRef } from './taxDocuments';
 import { getTaxYearStatus } from './taxYear';
+import { getEnabledModules } from './taxModules';
 import { perBusinessSchedules, scheduleOf } from '../taxModules';
+import type { FactValue, WorksheetBreakdownRow, WorksheetLine } from '../taxModules';
 
 export interface StackedBarSegment {
 	label: string;
@@ -244,9 +246,33 @@ export interface TaxCategoryTotal {
 	/** Total per received tax documents mapped to this category, if any */
 	documentTotal: number | null;
 	documentLines: DocumentLineRef[];
-	/** The figure to report: the document total when one exists, else the book total */
+	/** Figures computed by module worksheets (home office), added to the reported total */
+	worksheets: WorksheetRef[];
+	computedTotal: number;
+	/** The figure to report: the document total when one exists, else the book total, plus computed figures */
 	reportedTotal: number;
 	accounts: TaxAccountTotal[];
+}
+
+/** A worksheet's contribution to one category */
+export interface WorksheetRef {
+	worksheetId: string;
+	name: string;
+	amount: number;
+	breakdown: WorksheetBreakdownRow[];
+}
+
+/** One run of a module worksheet, for one business on per-business modules */
+export interface WorksheetOutput {
+	worksheetId: string;
+	moduleId: string;
+	name: string;
+	description: string | null;
+	businessId: string | null;
+	businessName: string | null;
+	facts: Partial<Record<string, FactValue>>;
+	lines: WorksheetLine[];
+	breakdown: WorksheetBreakdownRow[];
 }
 
 export interface TaxAccountTotal {
@@ -396,6 +422,8 @@ export interface TaxReportData {
 	dateRange: { from: Date; to: Date };
 	// Dynamic schedule sections
 	sections: ScheduleSection[];
+	// Module worksheets that produced figures, with their math
+	worksheets: WorksheetOutput[];
 	// Non-deductible items (for reference)
 	nonDeductible: {
 		expenses: TaxCategoryTotal[];
@@ -648,13 +676,14 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	const incomeAccounts = accounts.filter((a) => a.type === 'INCOME');
 	const expenseAccounts = accounts.filter((a) => a.type === 'EXPENSE');
 
-	const [documentTotals, yearStatus, allCategories, unmappedDocumentLines] = await Promise.all([
+	const [documentTotals, yearStatus, allCategories, unmappedDocumentLines, enabledModules] = await Promise.all([
 		getDocumentTotalsByCategory(bookId, year),
 		getTaxYearStatus(bookId, year),
 		db.taxCategory.findMany({ where: { bookId } }),
 		db.taxDocumentLine.count({
 			where: { taxCategoryId: null, amount: { not: 0 }, document: { bookId, year, status: 'RECEIVED' } }
-		})
+		}),
+		getEnabledModules(bookId)
 	]);
 
 	// Get transaction totals per account for the year.
@@ -772,6 +801,8 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 					total: 0,
 					documentTotal: null,
 					documentLines: [],
+					worksheets: [],
+					computedTotal: 0,
 					reportedTotal: 0,
 					accounts: []
 				};
@@ -824,15 +855,6 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		const deductible = allCategoryTotals.filter((c) => !nonDeductibleCategories.has(c.taxCategoryName));
 		const nonDeductibleItems = allCategoryTotals.filter((c) => nonDeductibleCategories.has(c.taxCategoryName));
 
-		// Sort categories by schedule reference for logical ordering
-		const sortCategories = (cats: TaxCategoryTotal[]) =>
-			cats.sort((a, b) => {
-				if (!a.scheduleRef && !b.scheduleRef) return a.taxCategoryName.localeCompare(b.taxCategoryName);
-				if (!a.scheduleRef) return 1;
-				if (!b.scheduleRef) return -1;
-				return a.scheduleRef.localeCompare(b.scheduleRef);
-			});
-
 		sortCategories(deductible);
 		sortCategories(nonDeductibleItems);
 
@@ -843,6 +865,15 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 
 		return { deductible, nonDeductible: nonDeductibleItems, uncategorized };
 	}
+
+	// Sort categories by schedule reference for logical ordering
+	const sortCategories = (cats: TaxCategoryTotal[]) =>
+		cats.sort((a, b) => {
+			if (!a.scheduleRef && !b.scheduleRef) return a.taxCategoryName.localeCompare(b.taxCategoryName);
+			if (!a.scheduleRef) return 1;
+			if (!b.scheduleRef) return -1;
+			return a.scheduleRef.localeCompare(b.scheduleRef);
+		});
 
 	const incomeGrouped = groupByTaxCategory(incomeAccounts, 'INCOME');
 	const expenseGrouped = groupByTaxCategory(expenseAccounts, 'EXPENSE');
@@ -925,10 +956,95 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		};
 	});
 
+	// Module worksheets: computed figures (a home office deduction from square
+	// footage) land on their category in the section they belong to, per
+	// business for per-business modules.
+	const worksheets: WorksheetOutput[] = [];
+	const accountFigures = accounts.map((a) => ({ id: a.id, path: a.path, type: a.type as 'INCOME' | 'EXPENSE', total: totalMap.get(a.id) ?? 0 }));
+	const sectionByKey = new Map(sections.map((s) => [s.key, s]));
+	const refreshSection = (section: ScheduleSection) => {
+		section.reportedIncome = section.incomeCategories.reduce((sum, c) => sum + c.reportedTotal, 0);
+		section.reportedExpenses = section.expenseCategories.reduce((sum, c) => sum + c.reportedTotal, 0);
+		section.reportedNet = section.reportedIncome - section.reportedExpenses;
+	};
+	for (const status of yearStatus.modules) {
+		const module = enabledModules.find((e) => e.moduleId === status.moduleId)?.module;
+		if (!module?.worksheets?.length) continue;
+		const facts: Partial<Record<string, FactValue>> = {};
+		for (const q of status.questions) if (q.answered && q.answer !== null) facts[q.key] = q.answer;
+
+		for (const worksheet of module.worksheets) {
+			const inputs: Partial<Record<string, FactValue>> = {};
+			for (const key of worksheet.facts) if (facts[key] !== undefined) inputs[key] = facts[key];
+
+			// A dry run tells us which category, and so which section, the
+			// worksheet feeds; the real run then gets that section's figures
+			// for its gross income limit.
+			const probe = worksheet.compute({ facts: inputs, accounts: accountFigures, section: { income: 0, expenses: 0 } });
+			if (!probe || probe.lines.length === 0) continue;
+			const category = allCategories.find((c) => c.name === probe.lines[0].category);
+			const schedule = scheduleOf(category?.scheduleRef ?? null);
+			if (!category || !schedule) continue;
+			const sectionKey = status.businessId ? `${schedule}|${status.businessId}` : schedule;
+			const section = sectionByKey.get(sectionKey);
+			if (!section) continue;
+
+			const own = [...section.incomeCategories, ...section.expenseCategories].find((c) => c.taxCategoryId === category.id);
+			const result = worksheet.compute({
+				facts: inputs,
+				accounts: accountFigures,
+				section: { income: section.reportedIncome, expenses: section.reportedExpenses - (own?.reportedTotal ?? 0) }
+			});
+			if (!result) continue;
+
+			for (const line of result.lines) {
+				const lineCategory = allCategories.find((c) => c.name === line.category);
+				if (!lineCategory) continue;
+				let entry = [...section.incomeCategories, ...section.expenseCategories].find((c) => c.taxCategoryId === lineCategory.id);
+				if (!entry) {
+					entry = {
+						taxCategoryId: lineCategory.id,
+						taxCategoryName: lineCategory.name,
+						scheduleRef: lineCategory.scheduleRef,
+						description: lineCategory.description,
+						accountType: 'EXPENSE',
+						businessId: section.businessId,
+						total: 0,
+						documentTotal: null,
+						documentLines: [],
+						worksheets: [],
+						computedTotal: 0,
+						reportedTotal: 0,
+						accounts: []
+					};
+					section.expenseCategories.push(entry);
+					sortCategories(section.expenseCategories);
+				}
+				entry.worksheets.push({ worksheetId: worksheet.id, name: worksheet.name, amount: line.amount, breakdown: result.breakdown });
+				entry.computedTotal += line.amount;
+				entry.reportedTotal = (entry.documentTotal ?? entry.total) + entry.computedTotal;
+			}
+			refreshSection(section);
+
+			worksheets.push({
+				worksheetId: worksheet.id,
+				moduleId: module.id,
+				name: worksheet.name,
+				description: worksheet.description ?? null,
+				businessId: status.businessId,
+				businessName: status.businessName,
+				facts: inputs,
+				lines: result.lines,
+				breakdown: result.breakdown
+			});
+		}
+	}
+
 	return {
 		year,
 		dateRange: { from: startDate, to: endDate },
 		sections,
+		worksheets,
 		nonDeductible: {
 			expenses: expenseGrouped.nonDeductible,
 			income: incomeGrouped.nonDeductible

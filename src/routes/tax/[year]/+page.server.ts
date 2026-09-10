@@ -72,7 +72,8 @@ export const actions: Actions = {
 		const year = parseYear(params.year);
 		const data = await request.formData();
 		const key = (data.get('key') as string | null)?.trim();
-		const raw = (data.get('value') as string | null) ?? '';
+		// A multi-select posts one value per chosen option
+		const raw = data.getAll('value').map(String).filter((v) => v.trim() !== '').join(',');
 		const businessId = (data.get('businessId') as string | null) || null;
 		if (!key) return fail(400, { error: 'Question key is required' });
 
