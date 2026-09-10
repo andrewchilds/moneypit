@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from "svelte";
+	import { onMount, onDestroy, tick } from "svelte";
 	import type { Snippet } from "svelte";
 	import { ZoomIn, ZoomOut, Maximize2 } from "lucide-svelte";
 	import type { PDFDocumentProxy } from "pdfjs-dist";
@@ -36,9 +36,11 @@
 		pick?: Pick | null;
 		popover?: Snippet<[Pick]>;
 		onselectline?: (id: string) => void;
+		/** Called once the pages are laid out, so line marks can be scrolled to */
+		onready?: () => void;
 	}
 
-	let { fileUrl, mimeType, lines, selectedLineId = null, pick = $bindable(null), popover, onselectline }: Props = $props();
+	let { fileUrl, mimeType, lines, selectedLineId = null, pick = $bindable(null), popover, onselectline, onready }: Props = $props();
 
 	interface PageState {
 		number: number;
@@ -71,6 +73,11 @@
 			loadError = (e as Error).message;
 		} finally {
 			loading = false;
+		}
+		if (!loadError) {
+			// Line marks render with the pages on the next flush
+			await tick();
+			onready?.();
 		}
 	});
 

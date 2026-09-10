@@ -289,6 +289,7 @@ export async function deleteDocumentLine(lineId: string) {
 }
 
 export interface DocumentLineRef {
+	lineId: string;
 	documentId: string;
 	formType: string;
 	issuer: string;
@@ -322,6 +323,7 @@ export async function getDocumentTotalsByCategory(bookId: string, year: number):
 		const amount = Number(line.amount);
 		entry.total += amount;
 		entry.lines.push({
+			lineId: line.id,
 			documentId: line.document.id,
 			formType: line.document.formType,
 			issuer: line.document.issuer,

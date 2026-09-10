@@ -278,6 +278,15 @@ A book with no businesses behaves as if it had exactly one. Creating the
 first business adopts the existing Schedule C accounts and answers, so
 nothing changes until a second business is added and accounts are moved.
 
+On the tax report (`/reports/tax?year=YYYY`) every figure can be traced:
+a category expands to its accounts and document lines, an account expands to
+the transactions counted for the year (fetched from
+`/api/tax-report/transactions?account=<id>&year=YYYY`, signed as they
+affected the total, so the rows sum to the figure), and a document line links
+to `/tax/documents/<id>?line=<lineId>`, which opens the viewer on that box with
+its region highlighted. An account whose transactions include a retirement
+counterparty shows the excluded amount on its row.
+
 `--year` defaults to the most recently completed calendar year. Boxes listed by
 `doc:forms` get a label and a guessed category automatically; pass
 `--category <id|name>` to override or `--no-category` to leave a line unmapped.

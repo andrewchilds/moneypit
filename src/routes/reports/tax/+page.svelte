@@ -4,15 +4,59 @@
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import type { PageData } from "./$types";
 	import { goto } from "$app/navigation";
+	import { formatLocalDate } from "$lib/utils/date";
 
 	let { data }: { data: PageData } = $props();
 
 	type Section = PageData["taxData"]["sections"][number];
 	type Category = Section["incomeCategories"][number];
 
-	let expandedCategories = $state<Set<string>>(new Set());
+	interface TransactionRow {
+		id: string;
+		date: string;
+		description: string;
+		amount: number;
+		otherAccount: { id: string; path: string } | null;
+		status: string;
+	}
+	interface AccountDetail {
+		rows: TransactionRow[];
+		total: number;
+		excluded: { count: number; amount: number };
+	}
 
-	const isExpandable = (category: Category) => category.accounts.length > 1 || category.documentLines.length > 0;
+	let expandedCategories = $state<Set<string>>(new Set());
+	let expandedAccounts = $state<Set<string>>(new Set());
+	// Transactions behind each account figure, fetched when the row is opened
+	let accountDetails = $state<Record<string, AccountDetail | { error: string }>>({});
+
+	const isExpandable = (category: Category) => category.accounts.length > 0 || category.documentLines.length > 0;
+
+	async function toggleAccount(key: string, accountId: string) {
+		if (expandedAccounts.has(key)) {
+			expandedAccounts.delete(key);
+		} else {
+			expandedAccounts.add(key);
+		}
+		expandedAccounts = new Set(expandedAccounts);
+		if (!accountDetails[accountId]) await loadAccount(accountId);
+	}
+
+	async function loadAccount(accountId: string) {
+		try {
+			const res = await fetch(`/api/tax-report/transactions?account=${encodeURIComponent(accountId)}&year=${data.taxData.year}`);
+			if (!res.ok) {
+				accountDetails[accountId] = { error: `Could not load transactions (${res.status})` };
+				return;
+			}
+			accountDetails[accountId] = (await res.json()) as AccountDetail;
+		} catch (e) {
+			accountDetails[accountId] = { error: (e as Error).message };
+		}
+	}
+
+	const blanks = (n: number) => Array.from({ length: n }, (_, i) => i);
+	const formatDate = (iso: string) => formatLocalDate(new Date(iso));
 
 	const openItems = $derived(data.taxData.openQuestions + data.taxData.missingDocuments);
 
@@ -128,6 +172,85 @@
 		</div>
 	{/if}
 
+	<!-- Account rows under a category. `lead`/`trail` pad the row to the table's column count. -->
+	{#snippet accountRows(category: Category, categoryKey: string, lead: number, trail: number)}
+		{#each category.accounts as account (account.id)}
+			{@const accountKey = `${categoryKey}-${account.id}`}
+			{@const open = expandedAccounts.has(accountKey)}
+			<tr class="account-row expandable" onclick={() => toggleAccount(accountKey, account.id)}>
+				{#each blanks(lead) as i (i)}<td></td>{/each}
+				<td class="account-path">
+					<span class="account-name">
+						{#if open}
+							<ChevronDown size={14} />
+						{:else}
+							<ChevronRight size={14} />
+						{/if}
+						{account.path}
+					</span>
+					{#if account.excluded !== 0}
+						<span class="excluded-note" title="Transactions whose other side is a retirement account are not counted">
+							excludes {formatCurrencyPrecise(account.excluded)} inside retirement accounts
+						</span>
+					{/if}
+				</td>
+				<td class="amount">{formatCurrencyPrecise(account.total)}</td>
+				{#each blanks(trail) as i (i)}<td></td>{/each}
+			</tr>
+			{#if open}
+				{@render transactionRows(account.id, lead, trail)}
+			{/if}
+		{/each}
+	{/snippet}
+
+	<!-- The transactions behind one account figure, once fetched -->
+	{#snippet transactionRows(accountId: string, lead: number, trail: number)}
+		{@const detail = accountDetails[accountId]}
+		{#if !detail}
+			<tr class="tx-row">
+				<td colspan={lead + 2 + trail} class="tx-note">Loading…</td>
+			</tr>
+		{:else if "error" in detail}
+			<tr class="tx-row">
+				<td colspan={lead + 2 + trail} class="tx-note">{detail.error}</td>
+			</tr>
+		{:else}
+			{#if detail.rows.length === 0}
+				<tr class="tx-row">
+					<td colspan={lead + 2 + trail} class="tx-note">No transactions counted this year.</td>
+				</tr>
+			{/if}
+			{#each detail.rows as tx (tx.id)}
+				<tr class="tx-row">
+					{#each blanks(lead) as i (i)}<td></td>{/each}
+					<td class="tx-cell">
+						<a href="/transactions/{tx.id}" class="tx-link">
+							<span class="tx-date">{formatDate(tx.date)}</span>
+							<span class="tx-desc">{tx.description}</span>
+						</a>
+						{#if tx.otherAccount}
+							<span class="tx-other">{tx.otherAccount.path}</span>
+						{:else}
+							<span class="tx-other">uncategorized</span>
+						{/if}
+					</td>
+					<td class="amount" class:negative-amount={tx.amount < 0}>{formatCurrencyPrecise(tx.amount)}</td>
+					{#each blanks(trail) as i (i)}<td></td>{/each}
+				</tr>
+			{/each}
+			{#if detail.excluded.count > 0}
+				<tr class="tx-row tx-excluded">
+					{#each blanks(lead) as i (i)}<td></td>{/each}
+					<td class="tx-cell tx-note">
+						{detail.excluded.count} transaction{detail.excluded.count === 1 ? "" : "s"} with a retirement account on the other side, not counted
+					</td>
+					<td class="amount">{formatCurrencyPrecise(detail.excluded.amount)}</td>
+					{#each blanks(trail) as i (i)}<td></td>{/each}
+				</tr>
+			{/if}
+		{/if}
+	{/snippet}
+
 	{#snippet categoryTable(section: Section, categories: Category[], kind: string, title: string, bookTotal: number, reportedTotal: number)}
 		<div class="subsection">
 			<h3>{title}</h3>
@@ -175,22 +298,12 @@
 							{/if}
 						</tr>
 						{#if expandedCategories.has(key)}
-							{#each category.accounts as account (account.id)}
-								<tr class="account-row">
-									<td></td>
-									<td class="account-path">{account.path}</td>
-									<td class="amount">{formatCurrencyPrecise(account.total)}</td>
-									{#if section.hasDocuments}
-										<td></td>
-										<td></td>
-									{/if}
-								</tr>
-							{/each}
-							{#each category.documentLines as line (line.documentId + line.box)}
+							{@render accountRows(category, key, 1, section.hasDocuments ? 2 : 0)}
+							{#each category.documentLines as line (line.lineId)}
 								<tr class="account-row document-line">
 									<td></td>
 									<td class="account-path">
-										<a href="/tax/{data.taxData.year}#doc-{line.documentId}">{line.formType} · {line.issuer}</a>
+										<a href="/tax/documents/{line.documentId}?line={line.lineId}" title="Open the form on this box">{line.formType} · {line.issuer}</a>
 										<span class="box-label">box {line.box}, {line.label}</span>
 									</td>
 									{#if section.hasDocuments}
@@ -267,6 +380,39 @@
 		</section>
 	{/each}
 
+	<!-- A category in a two-column table (name, amount) with the same drill-down -->
+	{#snippet simpleCategoryRow(category: Category, key: string)}
+		<tr
+			class="category-row"
+			class:expandable={isExpandable(category)}
+			onclick={() => isExpandable(category) && toggleCategory(key)}
+		>
+			<td class="category-name">
+				{#if isExpandable(category)}
+					{#if expandedCategories.has(key)}
+						<ChevronDown size={16} />
+					{:else}
+						<ChevronRight size={16} />
+					{/if}
+				{/if}
+				{category.taxCategoryName}
+			</td>
+			<td class="amount">{formatCurrencyPrecise(category.total)}</td>
+		</tr>
+		{#if expandedCategories.has(key)}
+			{@render accountRows(category, key, 0, 0)}
+			{#each category.documentLines as line (line.lineId)}
+				<tr class="account-row document-line">
+					<td class="account-path">
+						<a href="/tax/documents/{line.documentId}?line={line.lineId}" title="Open the form on this box">{line.formType} · {line.issuer}</a>
+						<span class="box-label">box {line.box}, {line.label}</span>
+					</td>
+					<td class="amount">{formatCurrencyPrecise(line.amount)}</td>
+				</tr>
+			{/each}
+		{/if}
+	{/snippet}
+
 	<!-- Non-Deductible Section -->
 	{#if data.taxData.nonDeductible.expenses.length > 0 || data.taxData.nonDeductible.income.length > 0}
 		<section class="report-section muted-section">
@@ -287,31 +433,7 @@
 						</thead>
 						<tbody>
 							{#each data.taxData.nonDeductible.expenses as category (category.taxCategoryId)}
-								<tr
-									class="category-row"
-									class:expandable={category.accounts.length > 1}
-									onclick={() => category.accounts.length > 1 && toggleCategory(`nd-${category.taxCategoryId}`)}
-								>
-									<td class="category-name">
-										{#if category.accounts.length > 1}
-											{#if expandedCategories.has(`nd-${category.taxCategoryId}`)}
-												<ChevronDown size={16} />
-											{:else}
-												<ChevronRight size={16} />
-											{/if}
-										{/if}
-										{category.taxCategoryName}
-									</td>
-									<td class="amount">{formatCurrencyPrecise(category.total)}</td>
-								</tr>
-								{#if expandedCategories.has(`nd-${category.taxCategoryId}`)}
-									{#each category.accounts as account (account.id)}
-										<tr class="account-row">
-											<td class="account-path">{account.path}</td>
-											<td class="amount">{formatCurrencyPrecise(account.total)}</td>
-										</tr>
-									{/each}
-								{/if}
+								{@render simpleCategoryRow(category, `nd-exp-${category.taxCategoryId}`)}
 							{/each}
 						</tbody>
 					</table>
@@ -330,10 +452,7 @@
 						</thead>
 						<tbody>
 							{#each data.taxData.nonDeductible.income as category (category.taxCategoryId)}
-								<tr>
-									<td>{category.taxCategoryName}</td>
-									<td class="amount">{formatCurrencyPrecise(category.total)}</td>
-								</tr>
+								{@render simpleCategoryRow(category, `nd-inc-${category.taxCategoryId}`)}
 							{/each}
 						</tbody>
 					</table>
@@ -598,9 +717,93 @@
 		background: var(--color-bg-alt);
 	}
 
+	.account-row.expandable {
+		cursor: pointer;
+	}
+
+	.account-row.expandable:hover {
+		background: var(--color-bg-hover, var(--color-border-light));
+	}
+
 	.account-path {
 		padding-left: var(--spacing-xl) !important;
 		color: var(--color-text-muted);
+	}
+
+	.account-name {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--spacing-xs);
+	}
+
+	.account-name :global(svg) {
+		flex-shrink: 0;
+	}
+
+	.excluded-note {
+		display: block;
+		font-size: 12px;
+		color: var(--color-info-dark, #087990);
+	}
+
+	.tx-row {
+		background: var(--color-bg);
+		font-size: 13px;
+	}
+
+	.tx-row td {
+		padding-top: 4px;
+		padding-bottom: 4px;
+	}
+
+	.tx-cell {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		align-items: baseline;
+		gap: var(--spacing-xs) var(--spacing-sm);
+		padding-left: calc(var(--spacing-xl) * 2) !important;
+	}
+
+	.tx-link {
+		display: contents;
+		color: var(--color-text);
+		text-decoration: none;
+	}
+
+	.tx-link:hover .tx-desc {
+		color: var(--color-primary);
+		text-decoration: underline;
+	}
+
+	.tx-date {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--color-text-muted);
+		white-space: nowrap;
+	}
+
+	.tx-desc {
+		cursor: pointer;
+	}
+
+	.tx-other {
+		font-size: 12px;
+		color: var(--color-text-muted);
+	}
+
+	.tx-note {
+		padding-left: calc(var(--spacing-xl) * 2) !important;
+		font-size: 12px;
+		color: var(--color-text-muted);
+	}
+
+	.tx-excluded .amount {
+		color: var(--color-text-light);
+		text-decoration: line-through;
+	}
+
+	.negative-amount {
+		color: var(--color-danger);
 	}
 
 	.total-row {

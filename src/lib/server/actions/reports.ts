@@ -246,11 +246,127 @@ export interface TaxCategoryTotal {
 	documentLines: DocumentLineRef[];
 	/** The figure to report: the document total when one exists, else the book total */
 	reportedTotal: number;
-	accounts: {
-		id: string;
-		path: string;
-		total: number;
-	}[];
+	accounts: TaxAccountTotal[];
+}
+
+export interface TaxAccountTotal {
+	id: string;
+	path: string;
+	total: number;
+	/**
+	 * Signed amount of this account's transactions left out of `total`
+	 * because their other side is a retirement account.
+	 */
+	excluded: number;
+}
+
+/** One transaction behind a tax report figure, signed as it affected the total. */
+export interface TaxTransactionRow {
+	id: string;
+	date: Date;
+	description: string;
+	/** Positive adds to the account's figure, negative (a refund) reduces it */
+	amount: number;
+	otherAccount: { id: string; path: string } | null;
+	status: string;
+}
+
+export interface TaxAccountTransactions {
+	accountId: string;
+	path: string;
+	accountType: AccountType;
+	rows: TaxTransactionRow[];
+	total: number;
+	/** Transactions with a retirement counterparty, excluded from `total` */
+	excluded: { count: number; amount: number };
+}
+
+const RETIREMENT_ASSET_TYPES = new Set<string>(['ROTH_RETIREMENT', 'TAX_DEFERRED']);
+
+interface TaxTransactionInput {
+	id: string;
+	date: Date;
+	description: string;
+	amount: number;
+	status: string;
+	mergedIntoId: string | null;
+	debitAccount: { id: string; path: string; assetType: string | null } | null;
+	creditAccount: { id: string; path: string; assetType: string | null } | null;
+}
+
+/**
+ * Apply the tax report's rules to an account's transactions: skip merged
+ * transactions, sign each amount by which side of the account it hit (so a
+ * refund on an expense account counts negative), and set aside those whose
+ * other side is a ROTH_RETIREMENT or TAX_DEFERRED asset account. The rows
+ * returned sum to the account's figure on the report.
+ */
+export function taxTransactionRows(
+	accountId: string,
+	accountType: AccountType,
+	transactions: TaxTransactionInput[]
+): Pick<TaxAccountTransactions, 'rows' | 'total' | 'excluded'> {
+	const rows: TaxTransactionRow[] = [];
+	const excluded = { count: 0, amount: 0 };
+	let total = 0;
+	for (const tx of transactions) {
+		if (tx.mergedIntoId !== null) continue;
+		const isDebit = tx.debitAccount?.id === accountId;
+		const isCredit = tx.creditAccount?.id === accountId;
+		if (!isDebit && !isCredit) continue;
+		const other = isDebit ? tx.creditAccount : tx.debitAccount;
+		const normalSide = accountType === 'INCOME' ? isCredit : isDebit;
+		const amount = normalSide ? tx.amount : -tx.amount;
+		if (other && RETIREMENT_ASSET_TYPES.has(other.assetType ?? '')) {
+			excluded.count += 1;
+			excluded.amount += amount;
+			continue;
+		}
+		total += amount;
+		rows.push({
+			id: tx.id,
+			date: tx.date,
+			description: tx.description,
+			amount,
+			otherAccount: other ? { id: other.id, path: other.path } : null,
+			status: tx.status
+		});
+	}
+	return { rows, total, excluded };
+}
+
+/**
+ * The transactions behind one account's figure on the tax report for a year.
+ */
+export async function getTaxAccountTransactions(bookId: string, accountId: string, year: number): Promise<TaxAccountTransactions> {
+	const account = await db.account.findUnique({ where: { id: accountId }, select: { id: true, bookId: true, path: true, type: true } });
+	if (!account || account.bookId !== bookId) throw new Error('Account not found in this book');
+	if (account.type !== 'INCOME' && account.type !== 'EXPENSE') throw new Error('Only income and expense accounts appear on the tax report');
+
+	const transactions = await db.transaction.findMany({
+		where: {
+			OR: [{ debitAccountId: accountId }, { creditAccountId: accountId }],
+			date: { gte: new Date(year, 0, 1), lte: new Date(year, 11, 31, 23, 59, 59, 999) }
+		},
+		select: {
+			id: true,
+			date: true,
+			description: true,
+			amount: true,
+			status: true,
+			mergedIntoId: true,
+			debitAccount: { select: { id: true, path: true, assetType: true } },
+			creditAccount: { select: { id: true, path: true, assetType: true } }
+		},
+		orderBy: [{ date: 'asc' }, { createdAt: 'asc' }]
+	});
+
+	const result = taxTransactionRows(
+		accountId,
+		account.type,
+		transactions.map((t) => ({ ...t, amount: Number(t.amount) }))
+	);
+	return { accountId, path: account.path, accountType: account.type, ...result };
 }
 
 export interface ScheduleSection {
@@ -547,31 +663,35 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	// Money earned inside a retirement account (dividends in an IRA, for example)
 	// is not taxable income, so transactions whose other side is a
 	// ROTH_RETIREMENT or TAX_DEFERRED asset account are excluded.
-	const accountTotals = await db.$queryRaw<{ accountId: string; total: number }[]>`
+	// The excluded amount is returned per account too, so the report can show
+	// where a figure differs from a plain sum of the account's transactions.
+	const accountTotals = await db.$queryRaw<{ accountId: string; total: number; excluded: number }[]>`
 		SELECT
-			a.id as "accountId",
-			COALESCE((
-				SELECT SUM(
-					CASE
-						WHEN a.type = 'INCOME' AND t."creditAccountId" = a.id THEN t.amount
-						WHEN a.type = 'EXPENSE' AND t."debitAccountId" = a.id THEN t.amount
-						ELSE -t.amount
-					END
-				)
-				FROM "Transaction" t
-				LEFT JOIN "Account" other ON other.id = CASE
-					WHEN t."debitAccountId" = a.id THEN t."creditAccountId"
-					ELSE t."debitAccountId"
-				END
-				WHERE (t."debitAccountId" = a.id OR t."creditAccountId" = a.id)
-				AND t.date >= ${startDate}
-				AND t.date <= ${endDate}
-				AND t."merged_into_id" IS NULL
-				AND (other."assetType" IS NULL OR other."assetType"::text NOT IN ('ROTH_RETIREMENT', 'TAX_DEFERRED'))
-			), 0) as total
-		FROM "Account" a
-		WHERE a."bookId" = ${bookId}
-		AND a.type IN ('INCOME', 'EXPENSE')
+			signed."accountId",
+			COALESCE(SUM(signed.amount) FILTER (WHERE NOT signed.retirement), 0) as total,
+			COALESCE(SUM(signed.amount) FILTER (WHERE signed.retirement), 0) as excluded
+		FROM (
+			SELECT
+				a.id as "accountId",
+				CASE
+					WHEN a.type = 'INCOME' AND t."creditAccountId" = a.id THEN t.amount
+					WHEN a.type = 'EXPENSE' AND t."debitAccountId" = a.id THEN t.amount
+					ELSE -t.amount
+				END as amount,
+				COALESCE(other."assetType"::text IN ('ROTH_RETIREMENT', 'TAX_DEFERRED'), false) as retirement
+			FROM "Account" a
+			JOIN "Transaction" t ON (t."debitAccountId" = a.id OR t."creditAccountId" = a.id)
+			LEFT JOIN "Account" other ON other.id = CASE
+				WHEN t."debitAccountId" = a.id THEN t."creditAccountId"
+				ELSE t."debitAccountId"
+			END
+			WHERE a."bookId" = ${bookId}
+			AND a.type IN ('INCOME', 'EXPENSE')
+			AND t.date >= ${startDate}
+			AND t.date <= ${endDate}
+			AND t."merged_into_id" IS NULL
+		) signed
+		GROUP BY signed."accountId"
 	`;
 
 	// Income credited from retirement accounts, reported separately so the
@@ -592,8 +712,10 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 
 	// Build a map of account id -> total
 	const totalMap = new Map<string, number>();
+	const excludedMap = new Map<string, number>();
 	for (const row of accountTotals) {
 		totalMap.set(row.accountId, Number(row.total));
+		excludedMap.set(row.accountId, Number(row.excluded));
 	}
 
 	// Categories that should be excluded from deductible totals
@@ -660,17 +782,18 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 
 		for (const account of accountList) {
 			const total = totalMap.get(account.id) ?? 0;
-			if (total === 0) continue;
+			const excluded = excludedMap.get(account.id) ?? 0;
+			if (total === 0 && excluded === 0) continue;
 
 			if (!account.taxCategoryId || !account.taxCategory) {
-				uncategorized.push({ id: account.id, path: account.path, total });
+				if (total !== 0) uncategorized.push({ id: account.id, path: account.path, total });
 				continue;
 			}
 
 			const cat = entryFor(account.taxCategory, scopeFor(account.taxCategory.scheduleRef, account.businessId));
 			cat.total += total;
 			cat.reportedTotal = cat.total;
-			cat.accounts.push({ id: account.id, path: account.path, total });
+			cat.accounts.push({ id: account.id, path: account.path, total, excluded });
 		}
 
 		// Categories with document figures but no account activity still belong

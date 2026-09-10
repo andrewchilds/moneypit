@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { untrack } from "svelte";
+	import { onMount, untrack } from "svelte";
 	import { enhance, deserialize } from "$app/forms";
 	import { invalidateAll } from "$app/navigation";
+	import { page } from "$app/state";
 	import { ArrowLeft, Briefcase, Crosshair, FileUp, Trash2, X } from "lucide-svelte";
 	import Button from "$lib/components/ui/Button.svelte";
 	import DocumentViewer, { type Pick } from "$lib/components/DocumentViewer.svelte";
@@ -189,6 +190,28 @@
 		viewer?.scrollToLine(id);
 	}
 
+	// Opened from the tax report on a particular line (?line=<id>): select it,
+	// arm its box, and scroll the file to where the figure was read from.
+	const requestedLine = page.url.searchParams.get("line");
+	let scrollPending = !!requestedLine;
+
+	onMount(() => {
+		const line = requestedLine ? doc.lines.find((l) => l.id === requestedLine) : undefined;
+		if (!line) {
+			scrollPending = false;
+			return;
+		}
+		selectedLineId = line.id;
+		activeBox = line.box;
+		if (!doc.file) document.getElementById(`amount-${line.box}`)?.focus();
+	});
+
+	function onViewerReady() {
+		if (!scrollPending || !selectedLineId) return;
+		scrollPending = false;
+		viewer?.scrollToLine(selectedLineId);
+	}
+
 	// ---- File attach / replace ----
 
 	let attachForm = $state<HTMLFormElement | undefined>();
@@ -260,6 +283,7 @@
 						{selectedLineId}
 						bind:pick
 						onselectline={selectLine}
+						onready={onViewerReady}
 					>
 						{#snippet popover(p: Pick)}
 							<div class="pick-form" role="dialog" aria-label="Save figure" tabindex="-1" onkeydown={onPickKeydown}>
