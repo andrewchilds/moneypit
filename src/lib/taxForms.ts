@@ -23,6 +23,8 @@ export const FORM_PRESETS: Record<string, FormPreset> = {
 		boxes: [
 			{ box: '1', label: 'Wages, tips, other compensation', categoryHints: ['^wages', 'salary'] },
 			{ box: '2', label: 'Federal income tax withheld', categoryHints: ['federal.*withheld'] },
+			{ box: '3', label: 'Social security wages' },
+			{ box: '5', label: 'Medicare wages and tips' },
 			{ box: '17', label: 'State income tax withheld', categoryHints: ['state tax withheld'] },
 			{ box: '19', label: 'Local income tax withheld', categoryHints: ['city tax withheld'] }
 		]

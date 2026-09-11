@@ -39,6 +39,19 @@ export const usPersonalBase: TaxModule = {
 		},
 		{ key: 'dependents', prompt: 'Number of dependents claimed', type: 'number' },
 		{
+			key: 'qualifying_children',
+			prompt: 'Of those, children under 17 who qualify for the child tax credit',
+			type: 'number',
+			description: 'Each qualifying child gets the child tax credit; other dependents get the credit for other dependents'
+		},
+		{
+			key: 'age_65_or_blind',
+			prompt: 'Boxes to check on Form 1040 line 12d (you or your spouse 65 or older, or blind)',
+			type: 'number',
+			carryForward: true,
+			description: 'Each box adds to the standard deduction: 0 to 4'
+		},
+		{
 			key: 'extension_filed',
 			prompt: 'Was a federal extension (Form 4868) filed?',
 			type: 'boolean'
@@ -77,6 +90,19 @@ export const usPersonalBase: TaxModule = {
 				{ value: 'rental', label: 'Rented to others (Schedule E)' }
 			]
 		},
+		{ key: 'taxpayer_first_name', prompt: 'Your first name and middle initial (as on the return)', type: 'text', carryForward: true },
+		{ key: 'taxpayer_last_name', prompt: 'Your last name', type: 'text', carryForward: true },
+		{ key: 'taxpayer_ssn', prompt: 'Your social security number', type: 'text', carryForward: true },
+		{ key: 'taxpayer_occupation', prompt: 'Your occupation', type: 'text', carryForward: true },
+		{ key: 'spouse_first_name', prompt: 'Spouse’s first name and middle initial', type: 'text', carryForward: true, description: 'Joint and separate returns both name the spouse' },
+		{ key: 'spouse_last_name', prompt: 'Spouse’s last name', type: 'text', carryForward: true },
+		{ key: 'spouse_ssn', prompt: 'Spouse’s social security number', type: 'text', carryForward: true },
+		{ key: 'spouse_occupation', prompt: 'Spouse’s occupation', type: 'text', carryForward: true },
+		{ key: 'address_street', prompt: 'Home address (number and street)', type: 'text', carryForward: true },
+		{ key: 'address_apt', prompt: 'Apartment number', type: 'text', carryForward: true },
+		{ key: 'address_city', prompt: 'City, town, or post office', type: 'text', carryForward: true },
+		{ key: 'address_state', prompt: 'State', type: 'text', carryForward: true },
+		{ key: 'address_zip', prompt: 'ZIP code', type: 'text', carryForward: true },
 		{
 			key: 'roth_basis',
 			prompt: 'Total Roth IRA contributions to date (basis)',

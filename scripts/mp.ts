@@ -15,6 +15,8 @@ import * as taxFacts from "../src/lib/server/actions/taxFacts";
 import * as taxYear from "../src/lib/server/actions/taxYear";
 import * as businesses from "../src/lib/server/actions/businesses";
 import { getTaxReportData } from "../src/lib/server/actions/reports";
+import { getTaxReturn } from "../src/lib/server/actions/taxReturn";
+import { renderReturnPdf, canRenderYear } from "../src/lib/server/taxReturn/pdf";
 import { FORM_PRESETS } from "../src/lib/taxForms";
 import { readConfig, writeConfig, getConfigPath, updateConfig } from "../src/lib/server/config";
 import * as fs from "fs";
@@ -777,6 +779,65 @@ async function main() {
 			case "tax:report": {
 				const bookId = await resolveBookId(opts);
 				json(await getTaxReportData(bookId, resolveYear(opts)));
+				break;
+			}
+
+			case "return:show": {
+				const bookId = await resolveBookId(opts);
+				const year = resolveYear(opts);
+				const result = await getTaxReturn(bookId, year);
+				if (!result.available) {
+					console.error(`${result.reason} Tax tables exist for ${result.supportedYears.join(", ")}.`);
+					process.exit(1);
+				}
+				if (opts.json) {
+					json(result.computation);
+					break;
+				}
+				const { computation } = result;
+				const s = computation.summary;
+				console.log(`Draft ${year} federal return (${computation.filingStatusLabel})`);
+				console.log(`  Adjusted gross income ${money(s.adjustedGrossIncome).padStart(14)}`);
+				console.log(`  ${(s.deductionKind === "itemized" ? "Itemized deductions" : "Standard deduction").padEnd(21)} ${money(s.deduction).padStart(14)}`);
+				if (s.qbiDeduction) console.log(`  QBI deduction         ${money(s.qbiDeduction).padStart(14)}`);
+				console.log(`  Taxable income        ${money(s.taxableIncome).padStart(14)}`);
+				console.log(`  Income tax            ${money(s.incomeTax).padStart(14)}`);
+				if (s.selfEmploymentTax) console.log(`  Self-employment tax   ${money(s.selfEmploymentTax).padStart(14)}`);
+				console.log(`  Total tax             ${money(s.totalTax).padStart(14)}`);
+				console.log(`  Payments              ${money(s.totalPayments).padStart(14)}`);
+				console.log(s.refund > 0 ? `  Refund                ${money(s.refund).padStart(14)}` : `  Amount owed           ${money(s.amountOwed).padStart(14)}`);
+				for (const form of computation.forms) {
+					console.log(`\n${form.name}${form.businessName ? ` — ${form.businessName}` : ""}  (${form.title})`);
+					for (const line of form.lines) {
+						const unused = line.kind === "input" && line.amount === 0;
+						if (unused || (line.kind === "text" && !line.text)) continue;
+						const value = line.kind === "text" ? (line.text ?? "") : money(line.amount ?? 0);
+						console.log(`  ${line.line.padEnd(10)} ${line.label.padEnd(58)} ${value.padStart(14)}`);
+						if (line.detail) console.log(`             ${line.detail}`);
+					}
+				}
+				if (computation.warnings.length > 0) {
+					console.log("\nCheck before filing:");
+					for (const w of computation.warnings) console.log(`  - ${w}`);
+				}
+				if (!canRenderYear(year)) console.log(`\nNo IRS forms on file for ${year}; return:pdf is unavailable for this year.`);
+				break;
+			}
+
+			case "return:pdf": {
+				const bookId = await resolveBookId(opts);
+				const year = resolveYear(opts);
+				const file = positional[0];
+				if (!file) throw new Error("Usage: return:pdf <file> [--year <year>]");
+				const result = await getTaxReturn(bookId, year);
+				if (!result.available) {
+					console.error(`${result.reason} Tax tables exist for ${result.supportedYears.join(", ")}.`);
+					process.exit(1);
+				}
+				const bytes = await renderReturnPdf(result.computation);
+				fs.writeFileSync(file, bytes);
+				console.log(`Wrote ${file}: ${result.computation.forms.map((f) => f.name + (f.businessName ? ` (${f.businessName})` : "")).join(", ")}`);
+				if (result.computation.warnings.length > 0) console.log(`${result.computation.warnings.length} item(s) to check; see return:show.`);
 				break;
 			}
 

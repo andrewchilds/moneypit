@@ -10,3 +10,4 @@ export * from './balanceRecords';
 export * from './taxDocuments';
 export * from './taxFacts';
 export * from './taxYear';
+export * from './taxReturn';

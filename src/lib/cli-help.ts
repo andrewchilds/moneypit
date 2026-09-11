@@ -74,6 +74,8 @@ TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
   tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
   worksheet:list [--year <year>] [--business <id|name>]   Print module worksheets (home office) with their math
+  return:show [--year <year>] [--json]  Draft federal return: every form and line with the math behind it
+  return:pdf <file> [--year <year>]     Write the draft return as filled IRS forms (one PDF)
   fact:list [--year <year>]             Questions from enabled modules with their answers
   fact:set <key> <value> [--year <year>] [--carry-forward] [--business <id|name>]
   fact:get <key> [--year <year>] [--business <id|name>]

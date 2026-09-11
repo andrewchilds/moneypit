@@ -181,6 +181,8 @@ TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
   tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
   worksheet:list [--year <year>] [--business <id|name>]   Module worksheets (home office) with their math
+  return:show [--year <year>] [--json]  Draft federal return: every form and line with the math behind it
+  return:pdf <file> [--year <year>]     Write the draft return as filled IRS forms (one PDF)
   fact:list [--year <year>]             Questions from enabled modules with their answers
   fact:set <key> <value> [--year <year>] [--carry-forward] [--business <id|name>]
   fact:get <key> [--year <year>] [--business <id|name>]
@@ -317,6 +319,40 @@ account's year total (the same figure as on the report) is multiplied by
 office ÷ total square footage. The sum is limited to the business's reported
 income less its other Schedule C expenses (Form 8829's gross income limit);
 the remainder is shown as a carryover. Depreciation is not computed.
+
+### Draft return
+
+`src/lib/server/taxReturn/compute.ts` turns the report's figures into a
+draft Form 1040 with its schedules: Schedule C per business, Schedule SE per
+owner, Form 8995 (simplified QBI), Schedules 1, 2, 3, A, B and D, through
+withholding, estimated payments and the refund or amount owed. It is a pure
+function of a `ReturnInput` assembled by `getTaxReturn` in
+`src/lib/server/actions/taxReturn.ts`: category totals come from the tax
+report by schedule line (a category's `reportedTotal` is what lands on its
+line), wages and withholding from W-2 and 1099 document boxes, 1099-R and
+1099-G boxes that have no category go straight to their lines, and answers
+(filing status, dependents, `qualifying_children`, `age_65_or_blind`,
+estimated and extension payments, the name and address questions, per
+business `business_owner`, `accounting_method` and `sep_contribution`) fill
+the rest. Meals on Schedule C line 24b are halved; a category on
+"Schedule C Line 27" lands on 27b. Every line carries a `detail` with its
+math, and `warnings` list what the computation could not do (AMT, credits
+other than the child tax credit, Schedule 1-A deductions, carryovers,
+Form 8995-A above the QBI threshold, a state refund on a 1099-G).
+
+Year-specific figures live in `src/lib/server/taxReturn/constants.ts`, one
+table per year (2024 and 2025 so far); a year without a table gets no
+return. `/reports/tax/return?year=YYYY` shows the forms line by line and
+`bin/mp return:show` prints them. `src/lib/server/taxReturn/pdf.ts` fills
+the IRS fillable PDFs in `forms/irs/<year>/` (from
+irs.gov/pub/irs-prior) with pdf-lib, flattens each and concatenates them in
+attachment order; the page's download link, `/reports/tax/return/pdf?year=`
+and `bin/mp return:pdf <file>` produce it. Adding a year means a constants
+table, the blank forms, and a field map in `pdf.ts` (dump field names with
+pdf-lib and match them to lines on the rendered page). The app does not
+e-file: IRS e-filing goes through Modernized e-File and needs an authorized
+provider, so the PDF is for paper filing or for entering into software or
+handing to a preparer.
 
 On the tax report (`/reports/tax?year=YYYY`) every figure can be traced:
 a category expands to its accounts and document lines, an account expands to

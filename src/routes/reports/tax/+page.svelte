@@ -115,11 +115,14 @@
 <div class="tax-report-page">
 	<header class="page-header">
 		<h1><a href="/reports">Reports</a> <ChevronRight size={20} /> Tax Report</h1>
-		<select class="year-select" value={data.taxData.year} onchange={handleYearChange}>
-			{#each data.availableYears as year (year)}
-				<option value={year}>{year}</option>
-			{/each}
-		</select>
+		<div class="header-actions">
+			<a class="return-link" href="/reports/tax/return?year={data.taxData.year}">Draft return</a>
+			<select class="year-select" value={data.taxData.year} onchange={handleYearChange}>
+				{#each data.availableYears as year (year)}
+					<option value={year}>{year}</option>
+				{/each}
+			</select>
+		</div>
 	</header>
 
 	<StatsGrid>
@@ -604,6 +607,25 @@
 
 	.page-header h1 :global(svg) {
 		color: var(--color-text-muted);
+	}
+
+	.header-actions {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-sm);
+	}
+
+	.return-link {
+		padding: var(--spacing-sm) var(--spacing-md);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		color: var(--color-primary);
+		text-decoration: none;
+		font-size: 14px;
+	}
+
+	.return-link:hover {
+		background: var(--color-bg-alt);
 	}
 
 	.year-select {
