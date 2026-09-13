@@ -1,4 +1,55 @@
-import type { TaxModule } from '../types';
+import type { TaxModule, TaxQuestion } from '../types';
+
+/**
+ * Who the dependents are, for the Form 1040 dependents table, Schedule 8812
+ * and Schedule EIC. Asked for each dependent counted in `dependents`, up to
+ * the four the form has room for.
+ */
+function dependentQuestions(): TaxQuestion[] {
+	return [1, 2, 3, 4].flatMap((n): TaxQuestion[] => {
+		const dependsOn = { key: 'dependents', min: n };
+		const label = `Dependent ${n}`;
+		return [
+			{ key: `dependent_${n}_first_name`, prompt: `${label}: first name and middle initial`, type: 'text', carryForward: true, dependsOn },
+			{ key: `dependent_${n}_last_name`, prompt: `${label}: last name`, type: 'text', carryForward: true, dependsOn },
+			{ key: `dependent_${n}_ssn`, prompt: `${label}: social security number`, type: 'text', carryForward: true, dependsOn },
+			{
+				key: `dependent_${n}_relationship`,
+				prompt: `${label}: relationship to you`,
+				type: 'text',
+				carryForward: true,
+				dependsOn,
+				description: 'Son, daughter, grandchild, parent, ...'
+			},
+			{
+				key: `dependent_${n}_birth_year`,
+				prompt: `${label}: year of birth`,
+				type: 'number',
+				carryForward: true,
+				dependsOn,
+				description: 'Decides the child tax credit (under 17) and the earned income credit (under 19, or under 24 as a student)'
+			},
+			{
+				key: `dependent_${n}_months_lived`,
+				prompt: `${label}: months lived with you in the U.S. this year`,
+				type: 'number',
+				dependsOn,
+				description: 'Enter 12 for the whole year; more than 6 is needed for the earned income credit'
+			},
+			{
+				key: `dependent_${n}_status`,
+				prompt: `${label}: full-time student or permanently and totally disabled?`,
+				type: 'choice',
+				dependsOn,
+				options: [
+					{ value: 'none', label: 'Neither' },
+					{ value: 'student', label: 'Full-time student (under 24)' },
+					{ value: 'disabled', label: 'Permanently and totally disabled' }
+				]
+			}
+		];
+	});
+}
 
 export const usPersonalBase: TaxModule = {
 	id: 'us-personal-base',
@@ -44,6 +95,7 @@ export const usPersonalBase: TaxModule = {
 			type: 'number',
 			description: 'Each qualifying child gets the child tax credit; other dependents get the credit for other dependents'
 		},
+		...dependentQuestions(),
 		{
 			key: 'age_65_or_blind',
 			prompt: 'Boxes to check on Form 1040 line 12d (you or your spouse 65 or older, or blind)',

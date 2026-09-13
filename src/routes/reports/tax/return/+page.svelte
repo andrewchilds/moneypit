@@ -107,6 +107,7 @@
 			{#if computation.summary.qbiDeduction > 0}<span>QBI deduction {formatCurrencyPrecise(computation.summary.qbiDeduction)}</span>{/if}
 			<span>Income tax {formatCurrencyPrecise(computation.summary.incomeTax)}</span>
 			{#if computation.summary.selfEmploymentTax > 0}<span>Self-employment tax {formatCurrencyPrecise(computation.summary.selfEmploymentTax)}</span>{/if}
+			{#if computation.summary.refundableCredits > 0}<span>Refundable credits {formatCurrencyPrecise(computation.summary.refundableCredits)}</span>{/if}
 			<span>Payments {formatCurrencyPrecise(computation.summary.totalPayments)}</span>
 			<span>Effective rate {computation.summary.effectiveRate}% of AGI</span>
 		</div>

@@ -11,10 +11,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { FormId, ReturnComputation, ReturnForm } from './compute';
 
-/** Line key -> field name suffix ("f1_47[0]"); checks are full-name suffixes too */
+/**
+ * Line key -> field name suffix ("f1_47[0]"); checks are full-name suffixes
+ * too. A list of suffixes is a comb spread over several one-character
+ * fields (a year of birth).
+ */
 interface FormFieldMap {
 	file: string;
-	fields: Record<string, string>;
+	fields: Record<string, string | string[]>;
 	checks: Record<string, string>;
 }
 
@@ -27,6 +31,53 @@ function scheduleBFields(): Record<string, string> {
 	seq('f1_', 4, 14, 2).forEach((f, i) => (fields[`1.amount.${i + 1}`] = f));
 	seq('f1_', 34, 15, 2).forEach((f, i) => (fields[`5.payer.${i + 1}`] = f));
 	seq('f1_', 35, 15, 2).forEach((f, i) => (fields[`5.amount.${i + 1}`] = f));
+	return fields;
+}
+
+/** The Form 1040 dependents table: four columns of first name, last name, SSN and relationship */
+function dependentTableFields(): Record<string, string> {
+	const fields: Record<string, string> = {};
+	for (let n = 1; n <= 4; n++) {
+		fields[`dep.first.${n}`] = `f1_${30 + n}[0]`;
+		fields[`dep.last.${n}`] = `f1_${34 + n}[0]`;
+		fields[`dep.ssn.${n}`] = `f1_${38 + n}[0]`;
+		fields[`dep.rel.${n}`] = `f1_${42 + n}[0]`;
+	}
+	return fields;
+}
+
+/** Its check boxes: (5) lived with you and in the U.S., (6) student or disabled, (7) which credit */
+function dependentTableChecks(): Record<string, string> {
+	const checks: Record<string, string> = {};
+	for (let n = 1; n <= 4; n++) {
+		checks[`dep.lived.${n}`] = `Dependent${n}[0].c1_${10 + 2 * n}[0]`;
+		checks[`dep.us.${n}`] = `Dependent${n}[0].c1_${11 + 2 * n}[0]`;
+		checks[`dep.student.${n}`] = `Dependent${n}[0].c1_${18 + 2 * n}[0]`;
+		checks[`dep.disabled.${n}`] = `Dependent${n}[0].c1_${19 + 2 * n}[0]`;
+		checks[`dep.ctc.${n}`] = `Dependent${n}[0].c1_${27 + n}[0]`;
+		checks[`dep.odc.${n}`] = `Dependent${n}[0].c1_${27 + n}[1]`;
+	}
+	return checks;
+}
+
+function scheduleCPartVFields(): Record<string, string> {
+	const fields: Record<string, string> = { '48': 'f2_33[0]' };
+	for (let n = 1; n <= 9; n++) {
+		fields[`48.desc.${n}`] = `f2_${13 + 2 * n}[0]`;
+		fields[`48.amount.${n}`] = `f2_${14 + 2 * n}[0]`;
+	}
+	return fields;
+}
+
+function scheduleEICFields(): Record<string, string | string[]> {
+	const fields: Record<string, string | string[]> = { name: 'f1_01[0]', ssn: 'f1_02[0]' };
+	for (let n = 1; n <= 3; n++) {
+		fields[`1.name.${n}`] = `f1_${String(2 + n).padStart(2, '0')}[0]`;
+		fields[`2.ssn.${n}`] = `f1_${String(5 + n).padStart(2, '0')}[0]`;
+		fields[`3.year.${n}`] = seq('f1_', 9 + 4 * (n - 1), 4);
+		fields[`5.rel.${n}`] = `f1_${20 + n}[0]`;
+		fields[`6.months.${n}`] = `f1_${23 + n}[0]`;
+	}
 	return fields;
 }
 
@@ -79,14 +130,19 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'25c': 'f2_19[0]',
 			'25d': 'f2_20[0]',
 			'26': 'f2_21[0]',
+			'27a': 'f2_23[0]',
+			'28': 'f2_24[0]',
 			'31': 'f2_27[0]',
 			'32': 'f2_28[0]',
 			'33': 'f2_29[0]',
 			'34': 'f2_30[0]',
 			'35a': 'f2_31[0]',
-			'37': 'f2_35[0]'
+			'37': 'f2_35[0]',
+			...dependentTableFields()
 		},
 		checks: {
+			...dependentTableChecks(),
+			'dependents:more': 'c1_11[0]',
 			'status:single': 'Page1[0].Checkbox_ReadOrder[0].c1_8[0]',
 			'status:mfj': 'Page1[0].Checkbox_ReadOrder[0].c1_8[1]',
 			'status:mfs': 'Page1[0].Checkbox_ReadOrder[0].c1_8[2]',
@@ -207,7 +263,8 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'28': 'f1_41[0]',
 			'29': 'f1_42[0]',
 			'30': 'f1_45[0]',
-			'31': 'f1_46[0]'
+			'31': 'f1_46[0]',
+			...scheduleCPartVFields()
 		},
 		checks: { 'method:cash': 'c1_1[0]', 'method:accrual': 'c1_1[1]', 'materially-participated': 'c1_2[0]' }
 	},
@@ -236,6 +293,57 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 		},
 		checks: {}
 	},
+	f1040sei: {
+		file: 'f1040sei.pdf',
+		fields: scheduleEICFields(),
+		checks: {
+			'4a.yes.1': 'Line4a_Child1_ReadOrder[0].Yes_ReadOrder[0].c1_1[0]',
+			'4a.no.1': 'Line4a_Child1_ReadOrder[0].c1_1[0]',
+			'4a.yes.2': 'Line4a_Child2_ReadOrder[0].Yes_ReadOrder[0].c1_2[0]',
+			'4a.no.2': 'Line4a_Child2_ReadOrder[0].c1_2[0]',
+			'4a.yes.3': 'Line4a_Child3_Yes_ReadOrder[0].c1_3[0]',
+			'4a.no.3': 'Page1[0].c1_3[0]',
+			'4b.yes.1': 'Line4b_Child1_ReadOrder[0].Yes_ReadOrder[0].c1_4[0]',
+			'4b.yes.2': 'Line4b_Child2_ReadOrder[0].Yes_ReadOrder[0].c1_5[0]',
+			'4b.yes.3': 'Line4b_Child3_Yes_ReadOrder[0].c1_6[0]'
+		}
+	},
+	f1040s8: {
+		file: 'f1040s8.pdf',
+		fields: {
+			name: 'f1_1[0]',
+			ssn: 'f1_2[0]',
+			'1': 'f1_3[0]',
+			'2d': 'f1_7[0]',
+			'3': 'f1_8[0]',
+			'4': 'f1_9[0]',
+			'5': 'f1_10[0]',
+			'6': 'f1_11[0]',
+			'7': 'f1_12[0]',
+			'8': 'f1_13[0]',
+			'9': 'f1_14[0]',
+			'10': 'f1_15[0]',
+			'11': 'f1_16[0]',
+			'12': 'f1_17[0]',
+			'13': 'f1_18[0]',
+			'14': 'f1_19[0]',
+			'16a': 'f2_2[0]',
+			'16b.count': 'f2_3[0]',
+			'16b': 'f2_4[0]',
+			'17': 'f2_5[0]',
+			'18a': 'f2_6[0]',
+			'19': 'f2_8[0]',
+			'20': 'f2_9[0]',
+			'21': 'f2_10[0]',
+			'22': 'f2_11[0]',
+			'23': 'f2_12[0]',
+			'24': 'f2_13[0]',
+			'25': 'f2_14[0]',
+			'26': 'f2_15[0]',
+			'27': 'f2_16[0]'
+		},
+		checks: { '12:no': 'c1_1[0]', '12:yes': 'c1_1[1]', '19:no': 'c2_1[0]', '19:yes': 'c2_1[1]', '20:no': 'c2_2[0]', '20:yes': 'c2_2[1]' }
+	},
 	f8995: {
 		file: 'f8995.pdf',
 		fields: {
@@ -259,7 +367,8 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'12': 'f1_28[0]',
 			'13': 'f1_29[0]',
 			'14': 'f1_30[0]',
-			'15': 'f1_31[0]'
+			'15': 'f1_31[0]',
+			'16': 'f1_32[0]'
 		},
 		checks: {}
 	}
@@ -301,18 +410,28 @@ async function fillForm(form: ReturnForm, map: FormFieldMap, year: number): Prom
 	const fields = acro.getFields();
 	const byName = (suffix: string) => fields.find((f) => f.getName() === suffix || f.getName().endsWith(`.${suffix}`));
 
-	for (const line of form.lines) {
-		if (!shouldPrint(line)) continue;
-		const suffix = map.fields[line.line];
-		if (!suffix) continue;
+	const setText = (suffix: string, text: string, size: number) => {
 		const field = byName(suffix);
-		if (!(field instanceof PDFTextField)) continue;
-		let value = line.kind === 'text' ? (line.text ?? '') : formatFormAmount(line.amount ?? 0);
+		if (!(field instanceof PDFTextField)) return;
+		let value = text;
 		// Comb fields (an SSN) take digits only and refuse anything past their length
 		const maxLength = field.getMaxLength();
 		if (maxLength !== undefined) value = value.replace(/[^A-Za-z0-9]/g, '').slice(0, maxLength);
 		field.setText(value);
-		field.setFontSize(line.kind === 'text' ? 9 : 10);
+		field.setFontSize(size);
+	};
+	for (const line of form.lines) {
+		if (!shouldPrint(line)) continue;
+		const suffix = map.fields[line.line];
+		if (!suffix) continue;
+		const value = line.kind === 'text' ? (line.text ?? '') : formatFormAmount(line.amount ?? 0);
+		if (Array.isArray(suffix)) {
+			// One character per field, as a year of birth is entered
+			const chars = value.replace(/[^A-Za-z0-9]/g, '');
+			suffix.forEach((s, i) => setText(s, chars[i] ?? '', 9));
+		} else {
+			setText(suffix, value, line.kind === 'text' ? 9 : 10);
+		}
 	}
 	for (const key of form.checks) {
 		const suffix = map.checks[key];

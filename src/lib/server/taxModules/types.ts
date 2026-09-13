@@ -21,8 +21,8 @@ export interface TaxQuestion {
 	description?: string;
 	options?: { value: string; label: string }[];
 	carryForward?: boolean;
-	/** Only ask when another fact has this value */
-	dependsOn?: { key: string; value: FactValue };
+	/** Only ask when another fact has this value, or (with `min`) a number at least this large */
+	dependsOn?: { key: string; value: FactValue } | { key: string; min: number };
 }
 
 /** A document the module expects to be on hand when a fact has a given value */

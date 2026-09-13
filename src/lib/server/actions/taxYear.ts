@@ -112,6 +112,11 @@ export async function getTaxYearStatus(bookId: string, year: number): Promise<Ta
 		}
 	}
 
+	const dependencyMet = (dep: NonNullable<TaxQuestion['dependsOn']>, answer: FactValue | undefined): boolean => {
+		if ('min' in dep) return typeof answer === 'number' ? answer >= dep.min : typeof answer === 'string' && Number(answer) >= dep.min;
+		return answer === dep.value;
+	};
+
 	// Per-business modules are asked once per business. A book with no
 	// businesses treats itself as one implicit business (businessId null).
 	const scopes: { businessId: string | null; businessName: string | null }[] =
@@ -130,7 +135,7 @@ export async function getTaxYearStatus(bookId: string, year: number): Promise<Ta
 				businessName: scope.businessName,
 				questions: (e.module.questions ?? []).map((q): QuestionStatus => {
 					const fact = answers.get(q.key);
-					const visible = !q.dependsOn || answers.get(q.dependsOn.key)?.value === q.dependsOn.value;
+					const visible = !q.dependsOn || dependencyMet(q.dependsOn, answers.get(q.dependsOn.key)?.value);
 					return {
 						...q,
 						moduleId: e.moduleId,

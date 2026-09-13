@@ -1,7 +1,7 @@
 import { getTaxReportData, type ScheduleSection, type TaxCategoryTotal } from './reports';
 import { getTaxYearStatus, type TaxYearStatus } from './taxYear';
 import { normalizeFormType } from '$lib/taxForms';
-import { computeReturn, type BusinessInput, type PayerFigure, type ReturnComputation, type ReturnInput, type ScheduleLineFigure } from '../taxReturn/compute';
+import { computeReturn, type BusinessInput, type DependentInput, type PayerFigure, type ReturnComputation, type ReturnInput, type ScheduleLineFigure } from '../taxReturn/compute';
 import { FILING_STATUSES, getTaxYearConstants, supportedTaxYears, type FilingStatus } from '../taxReturn/constants';
 import type { FactValue } from '../taxModules';
 
@@ -144,6 +144,9 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 	const scheduleD = sectionsOf('Schedule D')[0];
 	const scheduleE = sectionsOf('Schedule E')[0];
 	const schedule1 = sectionsOf('Schedule 1')[0];
+	const form1040 = sectionsOf('Form 1040')[0];
+	// A 1099-R box 2a mapped to a category reaches line 4b through the report
+	retirement.taxable += reported(categoryOn(form1040, '4b'));
 
 	const taxExempt = report.nonDeductible.income.find((c) => c.taxCategoryName === 'Tax Exempt');
 	const ordinaryDividends = categoryOn(scheduleB, '6');
@@ -176,6 +179,30 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 				.filter((f) => f.line !== '' && f.amount !== 0)
 		: [];
 
+	const dependents = asNumber(book.get('dependents'));
+	if (dependents > 0 && book.get('qualifying_children') === undefined) {
+		notes.push(`${dependents} dependent(s) are claimed but "children under 17 who qualify for the child tax credit" is unanswered; the return assumes none.`);
+	}
+	const dependentDetails: DependentInput[] = [];
+	for (let n = 1; n <= 4; n++) {
+		const key = (field: string) => book.get(`dependent_${n}_${field}`);
+		const firstName = asText(key('first_name'));
+		const ssn = asText(key('ssn'));
+		if (!firstName && !ssn) continue;
+		const status = asText(key('status'));
+		const birthYear = key('birth_year') === undefined ? null : asNumber(key('birth_year'));
+		const monthsLived = key('months_lived') === undefined ? null : asNumber(key('months_lived'));
+		dependentDetails.push({
+			firstName,
+			lastName: asText(key('last_name')),
+			ssn,
+			relationship: asText(key('relationship')),
+			birthYear: birthYear && birthYear > 0 ? birthYear : null,
+			monthsLived,
+			status: status === 'student' || status === 'disabled' ? status : 'none'
+		});
+	}
+
 	const input: ReturnInput = {
 		year,
 		filingStatus,
@@ -194,8 +221,9 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 			occupation: asText(book.get('taxpayer_occupation')),
 			spouseOccupation: asText(book.get('spouse_occupation'))
 		},
-		dependents: asNumber(book.get('dependents')),
+		dependents,
 		qualifyingChildren: asNumber(book.get('qualifying_children')),
+		dependentDetails,
 		additionalDeductionBoxes: asNumber(book.get('age_65_or_blind')),
 		wages,
 		socialSecurityWages,

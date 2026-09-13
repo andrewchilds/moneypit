@@ -6,16 +6,17 @@
  * What is computed: Schedule C per business, Schedule SE, Form 8995 (the
  * simplified QBI deduction), Schedule 1, Schedule 2 (self-employment tax,
  * additional Medicare tax, net investment income tax), Schedule 3 (an
- * extension payment), Schedules A, B and D, and Form 1040 through the refund
- * or amount owed. What is not: credits beyond the child tax credit, the
- * alternative minimum tax, depreciation, carryovers from prior years, and
- * the other deductions on Schedule 1-A. Each gap that could apply is listed
- * in `warnings`.
+ * extension payment), Schedules A, B and D, Schedule 8812 (the child tax
+ * credit and its refundable part), Schedule EIC and the earned income
+ * credit, and Form 1040 through the refund or amount owed. What is not:
+ * other credits, the alternative minimum tax, depreciation, carryovers from
+ * prior years, and the other deductions on Schedule 1-A. Each gap that could
+ * apply is listed in `warnings`.
  */
 
 import { FILING_STATUS_LABELS, type FilingStatus, type TaxYearConstants } from './constants';
 
-export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f1040sse' | 'f8995';
+export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8995';
 
 export interface PayerFigure {
 	name: string;
@@ -59,6 +60,17 @@ export interface ReturnIdentity {
 	spouseOccupation: string;
 }
 
+export interface DependentInput {
+	firstName: string;
+	lastName: string;
+	ssn: string;
+	relationship: string;
+	birthYear: number | null;
+	/** Months lived with the taxpayer in the U.S. during the year */
+	monthsLived: number | null;
+	status: 'none' | 'student' | 'disabled';
+}
+
 export interface ReturnInput {
 	year: number;
 	filingStatus: FilingStatus | null;
@@ -66,6 +78,8 @@ export interface ReturnInput {
 	dependents: number;
 	/** Dependents under 17 who qualify for the child tax credit */
 	qualifyingChildren: number;
+	/** Who the dependents are, as far as answered; may be shorter than `dependents` */
+	dependentDetails: DependentInput[];
 	/** Boxes checked on Form 1040 line 12d: you or your spouse 65 or older or blind */
 	additionalDeductionBoxes: number;
 	wages: number;
@@ -135,6 +149,8 @@ export interface ReturnSummary {
 	incomeTax: number;
 	selfEmploymentTax: number;
 	totalTax: number;
+	/** Earned income credit plus the additional child tax credit, counted in `totalPayments` */
+	refundableCredits: number;
 	totalPayments: number;
 	refund: number;
 	amountOwed: number;
@@ -228,6 +244,46 @@ export function qualifiedDividendsAndCapitalGainTax(
 	};
 }
 
+/** Age at the end of the tax year is under `age` */
+function underAge(d: DependentInput, year: number, age: number): boolean {
+	return d.birthYear !== null && year - d.birthYear < age;
+}
+
+/**
+ * The earned income credit as the EIC table gives it: the credit is figured
+ * at the midpoint of each $50 range of earned income, and phased out on the
+ * larger of earned income or AGI. Eligibility beyond the investment income
+ * limit and filing status is not checked.
+ */
+export function earnedIncomeCredit(
+	earnedIncome: number,
+	agi: number,
+	qualifyingChildren: number,
+	investmentIncome: number,
+	constants: TaxYearConstants,
+	status: FilingStatus
+): { credit: number; detail: string } {
+	const table = constants.earnedIncomeCredit;
+	const row = table.byChildren[Math.min(qualifyingChildren, table.byChildren.length - 1)];
+	const start = status === 'mfj' ? row.phaseOutStart.mfj : row.phaseOutStart.single;
+	if (status === 'mfs') return { credit: 0, detail: 'Not computed for married filing separately (the separated-spouse exception is not checked)' };
+	if (earnedIncome < 1) return { credit: 0, detail: 'No earned income' };
+	if (investmentIncome > table.investmentIncomeLimit) {
+		return { credit: 0, detail: `Investment income of ${money(investmentIncome)} is over the ${money(table.investmentIncomeLimit)} limit` };
+	}
+	const mid = (n: number) => Math.floor(n / 50) * 50 + 25;
+	const phaseIn = Math.min(row.maxCredit, round2(Math.min(mid(earnedIncome), row.earnedIncomeAmount) * row.rate));
+	const base = Math.max(earnedIncome, agi);
+	const reduction = mid(base) > start ? round2((mid(base) - start) * row.phaseOutRate) : 0;
+	const credit = Math.max(0, Math.round(phaseIn - reduction));
+	const children = `${qualifyingChildren} qualifying child${qualifyingChildren === 1 ? '' : 'ren'}`;
+	if (credit === 0) return { credit, detail: `${children}: earned income of ${money(base)} is past the phase-out for ${FILING_STATUS_LABELS[status].toLowerCase()}` };
+	return {
+		credit,
+		detail: `${children}: ${pct(row.rate)} of earned income ${money(earnedIncome)} up to ${money(row.maxCredit)}${reduction ? `, less ${pct(row.phaseOutRate)} of the ${money(base)} over ${money(start)}` : ''}, from the EIC table`
+	};
+}
+
 const SCHEDULE_C_EXPENSE_LINES = [
 	['8', 'Advertising'],
 	['9', 'Car and truck expenses'],
@@ -268,18 +324,19 @@ function scheduleC(business: BusinessInput, warnings: string[]): FormBuilder {
 	f.check('materially-participated');
 
 	const incomeOn = (line: string) => sum(business.income.filter((i) => i.line === line).map((i) => i.amount));
+	const expensesOn = (line: string) => {
+		const entries = business.expenses.filter((e) => (SCHEDULE_C_LINE_ALIASES[e.line] ?? e.line) === line);
+		return { amount: sum(entries.map((e) => e.amount)), categories: entries.map((e) => e.category), entries };
+	};
 	const line1 = f.amount('1', 'Gross receipts or sales', incomeOn('1'), 'input');
 	const line2 = f.amount('2', 'Returns and allowances', incomeOn('2'), 'input');
 	const line3 = f.amount('3', 'Line 1 less line 2', line1 - line2);
-	const line4 = f.amount('4', 'Cost of goods sold', 0, 'input');
+	const cogs = expensesOn('4');
+	const line4 = f.amount('4', 'Cost of goods sold', cogs.amount, 'input', cogs.categories.join(', ') || undefined);
 	const line5 = f.amount('5', 'Gross profit', line3 - line4);
 	const line6 = f.amount('6', 'Other income', incomeOn('6'), 'input');
 	const line7 = f.amount('7', 'Gross income', line5 + line6, 'total');
 
-	const expensesOn = (line: string) => {
-		const entries = business.expenses.filter((e) => (SCHEDULE_C_LINE_ALIASES[e.line] ?? e.line) === line);
-		return { amount: sum(entries.map((e) => e.amount)), categories: entries.map((e) => e.category) };
-	};
 	let line28 = 0;
 	for (const [line, label] of SCHEDULE_C_EXPENSE_LINES) {
 		const { amount, categories } = expensesOn(line);
@@ -294,7 +351,7 @@ function scheduleC(business: BusinessInput, warnings: string[]): FormBuilder {
 		f.amount(line, label, deductible, 'input', detail);
 		line28 = round2(line28 + deductible);
 	}
-	const unknown = business.expenses.filter((e) => !SCHEDULE_C_EXPENSE_LINES.some(([l]) => l === (SCHEDULE_C_LINE_ALIASES[e.line] ?? e.line)) && e.line !== '30');
+	const unknown = business.expenses.filter((e) => !SCHEDULE_C_EXPENSE_LINES.some(([l]) => l === (SCHEDULE_C_LINE_ALIASES[e.line] ?? e.line)) && e.line !== '30' && e.line !== '4');
 	for (const e of unknown) {
 		warnings.push(`${name}: ${e.category} (${money(e.amount)}) is on Schedule C line ${e.line}, which the computation does not know; it was left off.`);
 	}
@@ -302,6 +359,17 @@ function scheduleC(business: BusinessInput, warnings: string[]): FormBuilder {
 	const line29 = f.amount('29', 'Tentative profit or loss', line7 - line28);
 	const line30 = f.amount('30', 'Expenses for business use of home', expensesOn('30').amount, 'input');
 	f.amount('31', 'Net profit or loss', line29 - line30, 'result');
+
+	// Part V lists what is behind line 27b, one row per category (nine rows on the form)
+	const other = expensesOn('27b');
+	if (other.amount !== 0) {
+		const rows = other.entries.length > 9 ? [...other.entries.slice(0, 8), { category: 'Other', amount: sum(other.entries.slice(8).map((e) => e.amount)) }] : other.entries;
+		rows.forEach((e, i) => {
+			f.text(`48.desc.${i + 1}`, `Other expense ${i + 1}`, e.category);
+			f.amount(`48.amount.${i + 1}`, `Other expense ${i + 1}`, e.amount, 'input');
+		});
+		f.amount('48', 'Total other expenses (to line 27b)', other.amount, 'total');
+	}
 	return f;
 }
 
@@ -362,19 +430,34 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	}
 
 	// Schedule SE per owner. W-2 wages are assumed to be the taxpayer's.
-	const scheduleSEs: FormBuilder[] = [];
+	const scheduleSEs: { owner: 'taxpayer' | 'spouse'; form: FormBuilder }[] = [];
 	for (const owner of ['taxpayer', 'spouse'] as const) {
 		if (!scheduleCs.some((s) => s.business.owner === owner)) continue;
 		const se = scheduleSE(owner, netProfitOf(owner), owner === 'taxpayer' ? input.socialSecurityWages : 0, constants, warnings);
 		if (!se) continue;
 		se.text('name', 'Name of person with self-employment income', ownerName(owner));
 		se.text('ssn', 'Social security number of person with self-employment income', ownerSsn(owner));
-		scheduleSEs.push(se);
+		scheduleSEs.push({ owner, form: se });
 	}
 	if (scheduleSEs.length > 1) warnings.push('W-2 wages were counted against the taxpayer’s Schedule SE only.');
-	const seTax = sum(scheduleSEs.map((s) => s.get('12')));
-	const seDeduction = sum(scheduleSEs.map((s) => s.get('13')));
-	const seEarnings = sum(scheduleSEs.map((s) => s.get('4c')));
+	const seTax = sum(scheduleSEs.map((s) => s.form.get('12')));
+	const seDeduction = sum(scheduleSEs.map((s) => s.form.get('13')));
+	const seEarnings = sum(scheduleSEs.map((s) => s.form.get('4c')));
+	const seDeductionOf = (owner: 'taxpayer' | 'spouse') => scheduleSEs.find((s) => s.owner === owner)?.form.get('13') ?? 0;
+
+	// Deductions attributable to each business: its owner's self-employment
+	// tax deduction in proportion to its share of the owner's profit, plus its
+	// own retirement contribution. They limit the health insurance deduction
+	// and reduce qualified business income.
+	const attributable = scheduleCs.map(({ business, form }) => {
+		const profit = form.get('31');
+		const ownerProfit = sum(scheduleCs.filter((s) => s.business.owner === business.owner).map((s) => Math.max(0, s.form.get('31'))));
+		const se = ownerProfit > 0 ? round2((seDeductionOf(business.owner) * Math.max(0, profit)) / ownerProfit) : 0;
+		return { profit, se, sep: business.sepContribution, limit: Math.max(0, round2(profit - se - business.sepContribution)) };
+	});
+	// The health insurance plan is established under one business; without an
+	// answer, take the one that can absorb the most.
+	const planBusiness = attributable.reduce((best, a, i) => (a.limit > attributable[best].limit ? i : best), 0);
 
 	// Form 1040 income
 	const f1040 = new FormBuilder('f1040', 'Form 1040', 'U.S. Individual Income Tax Return');
@@ -395,6 +478,34 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	if (married) f1040.text('spouseOccupation', 'Spouse’s occupation', id.spouseOccupation);
 	f1040.check(`status:${status}`);
 	if (!id.firstName || !id.ssn) warnings.push('Name and social security number are not answered; the PDF will have them blank.');
+
+	// Dependents table
+	input.dependentDetails.slice(0, 4).forEach((d, i) => {
+		const n = i + 1;
+		f1040.text(`dep.first.${n}`, `Dependent ${n} first name`, d.firstName);
+		f1040.text(`dep.last.${n}`, `Dependent ${n} last name`, d.lastName);
+		f1040.text(`dep.ssn.${n}`, `Dependent ${n} social security number`, d.ssn);
+		f1040.text(`dep.rel.${n}`, `Dependent ${n} relationship`, d.relationship);
+		const lived = (d.monthsLived ?? 0) > 6;
+		f1040.check(`dep.lived.${n}`, lived);
+		f1040.check(`dep.us.${n}`, lived);
+		f1040.check(`dep.student.${n}`, d.status === 'student');
+		f1040.check(`dep.disabled.${n}`, d.status === 'disabled');
+		const child = d.birthYear !== null && underAge(d, input.year, 17) && d.ssn !== '';
+		f1040.check(`dep.ctc.${n}`, child);
+		f1040.check(`dep.odc.${n}`, d.birthYear !== null && !child);
+	});
+	if (input.dependents > 4) {
+		f1040.check('dependents:more');
+		warnings.push('More than four dependents; the Form 1040 table holds four, so list the rest on an attached statement.');
+	}
+	if (input.dependentDetails.length < input.dependents) {
+		warnings.push(`${input.dependents - input.dependentDetails.length} of the ${input.dependents} dependent(s) have no name or social security number answered; the Form 1040 dependents table needs them.`);
+	}
+	const detailedChildren = input.dependentDetails.filter((d) => d.birthYear !== null && underAge(d, input.year, 17) && d.ssn !== '').length;
+	if (input.dependentDetails.length >= input.dependents && input.dependentDetails.every((d) => d.birthYear !== null) && detailedChildren !== input.qualifyingChildren) {
+		warnings.push(`The dependent details show ${detailedChildren} child(ren) under 17 with a social security number, but the child tax credit answer says ${input.qualifyingChildren}.`);
+	}
 
 	const line1a = f1040.amount('1a', 'Total amount from Form(s) W-2, box 1', input.wages, 'input');
 	const line1z = f1040.amount('1z', 'Add lines 1a through 1h', line1a);
@@ -418,10 +529,16 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	if (input.retirement.gross > 0) {
 		warnings.push('Retirement distributions were placed on line 4 (IRA distributions); move pension or annuity amounts to line 5 by hand.');
 	}
+	if (input.retirement.gross > input.retirement.taxable) {
+		warnings.push(
+			`${money(input.retirement.gross - input.retirement.taxable)} of the retirement distributions is treated as nontaxable; Form 8606 (Roth IRA or nondeductible IRA basis) supports that and is not produced.`
+		);
+	}
 
 	// Schedule D
 	let line7 = 0;
 	let netLongTermGain = 0;
+	let netCapital = 0;
 	let scheduleD: FormBuilder | null = null;
 	const { shortTerm, longTerm } = input.capitalGains;
 	if (shortTerm !== 0 || longTerm !== 0) {
@@ -433,10 +550,10 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		scheduleD.amount('8a', 'Long-term totals from Form 1099-B (gain or loss)', longTerm, 'input');
 		const d15 = scheduleD.amount('15', 'Net long-term capital gain or loss', longTerm, 'total');
 		const d16 = scheduleD.amount('16', 'Combine lines 7 and 15', d7 + d15, 'total');
+		netCapital = d16;
 		const limit = constants.capitalLossLimit[status];
 		if (d16 < 0) {
 			line7 = scheduleD.amount('21', `Loss limited to $${limit.toLocaleString('en-US')}`, Math.max(d16, -limit), 'result');
-			if (d16 < -limit) warnings.push(`Capital loss of ${money(-d16)} is limited to ${money(limit)} this year; the rest carries forward (not tracked).`);
 		} else {
 			line7 = d16;
 		}
@@ -464,7 +581,26 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	const sep = sum(input.businesses.map((b) => b.sepContribution));
 	s1.amount('15', 'Deductible part of self-employment tax', seDeduction, 'input');
 	s1.amount('16', 'Self-employed SEP, SIMPLE, and qualified plans', sep + s1On('16'), 'input');
-	s1.amount('17', 'Self-employed health insurance deduction', s1On('17'), 'input');
+	const premiums = s1On('17');
+	let sehi = premiums;
+	let sehiExcess = 0;
+	let sehiDetail: string | undefined;
+	if (premiums > 0 && attributable.length > 0) {
+		const plan = attributable[planBusiness];
+		const planName = scheduleCs[planBusiness].business.name ?? 'the Schedule C business';
+		sehi = Math.min(premiums, plan.limit);
+		sehiExcess = round2(premiums - sehi);
+		sehiDetail = `Limited to ${money(plan.limit)}: net profit of ${planName} (${money(plan.profit)}) less its self-employment tax deduction (${money(plan.se)})${plan.sep ? ` and retirement contribution (${money(plan.sep)})` : ''}`;
+		if (sehiExcess > 0) {
+			warnings.push(
+				`Self-employed health insurance premiums of ${money(premiums)} exceed the ${money(plan.limit)} of net self-employment earnings from ${planName}; ${money(sehiExcess)} was moved to Schedule A medical expenses.`
+			);
+		}
+		if (scheduleCs.length > 1) warnings.push(`The health insurance plan is assumed to be established under ${planName}, the business with the largest net earnings.`);
+	} else if (premiums > 0) {
+		warnings.push('Self-employed health insurance deduction is not checked against net self-employment earnings (no Schedule C).');
+	}
+	s1.amount('17', 'Self-employed health insurance deduction', sehi, 'input', sehiExcess > 0 ? sehiDetail : undefined);
 	const s1AdjLines = ['11', '12', '13', '14', '18', '19a', '20', '21', '23'].map((l) => s1.amount(l, `Line ${l}`, s1On(l), 'input'));
 	const s1Line26 = s1.amount('26', 'Adjustments to income', s1.get('15') + s1.get('16') + s1.get('17') + sum(s1AdjLines), 'total');
 	if (sep > 0) warnings.push(`SEP contribution of ${money(sep)} is taken as answered; the deductible maximum depends on net earnings and is not checked.`);
@@ -476,7 +612,13 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	f1040.amount('11b', 'Amount from line 11a (adjusted gross income)', agi);
 
 	// Schedule A versus the standard deduction
-	const it = input.itemized;
+	const it = { ...input.itemized, medical: round2(input.itemized.medical + sehiExcess) };
+	for (const key of Object.keys(it) as (keyof typeof it)[]) {
+		if (it[key] < 0) {
+			warnings.push(`Schedule A ${key.replace(/([A-Z])/g, ' $1').toLowerCase()} is ${money(it[key])} because refunds exceed payments; it was set to zero.`);
+			it[key] = 0;
+		}
+	}
 	const additional = input.additionalDeductionBoxes * (married ? constants.additionalStandardDeduction.married : constants.additionalStandardDeduction.single);
 	const standard = round2(constants.standardDeduction[status] + additional);
 	let scheduleA: FormBuilder | null = null;
@@ -485,9 +627,9 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		const a = new FormBuilder('f1040sa', 'Schedule A', 'Itemized Deductions');
 		a.text('name', 'Name(s) shown on Form 1040', `${id.firstName} ${id.lastName}`.trim());
 		a.text('ssn', 'Your social security number', id.ssn);
-		const a1 = a.amount('1', 'Medical and dental expenses', it.medical, 'input');
+		const a1 = a.amount('1', 'Medical and dental expenses', it.medical, 'input', sehiExcess > 0 ? `Includes ${money(sehiExcess)} of health insurance premiums over the Schedule 1 line 17 limit` : undefined);
 		const a2 = a.amount('2', 'Adjusted gross income', agi, 'input');
-		const a3 = a.amount('3', `Line 2 × ${pct(constants.medicalFloorRate)}`, a2 * constants.medicalFloorRate);
+		const a3 = a.amount('3', `Line 2 × ${pct(constants.medicalFloorRate)}`, Math.max(0, a2) * constants.medicalFloorRate);
 		const a4 = a.amount('4', 'Deductible medical expenses', Math.max(0, a1 - a3));
 		const a5a = a.amount('5a', 'State and local income taxes', it.stateLocalIncomeTaxes, 'input');
 		const a5b = a.amount('5b', 'State and local real estate taxes', it.realEstateTaxes, 'input');
@@ -530,26 +672,30 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	let f8995: FormBuilder | null = null;
 	let qbiDeduction = 0;
 	const taxableBeforeQbi = Math.max(0, agi - line12);
-	if (totalNetProfit > 0) {
+	if (scheduleCs.length > 0) {
 		const q = constants.qualifiedBusinessIncome;
 		const f = new FormBuilder('f8995', 'Form 8995', 'Qualified Business Income Deduction Simplified Computation');
 		f.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
 		f.text('ssn', 'Your taxpayer identification number', id.ssn);
 		// Each business's QBI is its net profit less the deductions attributable to it
 		const rows = ['i', 'ii', 'iii', 'iv', 'v'];
-		const positiveProfit = sum(scheduleCs.map((s) => Math.max(0, s.form.get('31'))));
 		let qbiTotal = 0;
-		scheduleCs.forEach(({ business, form }, i) => {
-			const profit = form.get('31');
-			if (profit < 0) warnings.push(`${business.name ?? 'A business'} shows a loss; it reduces qualified business income.`);
-			// Deductions attributable to the business, in proportion to its share of the profit
-			const share = positiveProfit > 0 ? Math.max(0, profit) / positiveProfit : 0;
-			const qbi = round2(profit - share * seDeduction - business.sepContribution - share * s1On('17'));
+		scheduleCs.forEach(({ business }, i) => {
+			const a = attributable[i];
+			if (a.profit < 0) warnings.push(`${business.name ?? 'A business'} shows a loss; it reduces qualified business income.`);
+			const health = i === planBusiness ? sehi : 0;
+			const qbi = round2(a.profit - a.se - a.sep - health);
 			qbiTotal = round2(qbiTotal + qbi);
 			if (i >= rows.length) return;
 			const label = business.unassigned ? 'Unassigned Schedule C accounts' : business.name || business.description || 'Schedule C';
 			f.text(`1${rows[i]}.name`, `Trade or business ${i + 1}`, label);
-			f.amount(`1${rows[i]}.qbi`, `Qualified business income ${i + 1}`, qbi, 'input', 'Net profit less the self-employment tax deduction and retirement contributions attributable to it');
+			f.amount(
+				`1${rows[i]}.qbi`,
+				`Qualified business income ${i + 1}`,
+				qbi,
+				'input',
+				`Net profit ${money(a.profit)} less the self-employment tax deduction (${money(a.se)})${a.sep ? `, retirement contribution (${money(a.sep)})` : ''}${health ? ` and health insurance deduction (${money(health)})` : ''} attributable to it`
+			);
 		});
 		if (scheduleCs.length > rows.length) warnings.push('Form 8995 lists five businesses; the rest are in the total only.');
 		const f2 = f.amount('2', 'Total qualified business income', qbiTotal, 'total');
@@ -574,6 +720,8 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 			);
 		}
 		qbiDeduction = f.amount('15', 'Qualified business income deduction', deduction, 'result');
+		const f16 = f.amount('16', 'Total qualified business (loss) carryforward', Math.min(0, f2), 'result');
+		if (f16 < 0) warnings.push(`Qualified business loss of ${money(-f16)} carries forward to next year's Form 8995 line 3 (not tracked).`);
 		f8995 = f;
 	}
 
@@ -581,6 +729,16 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	f1040.amount('13a', 'Qualified business income deduction from Form 8995', qbiDeduction, 'input');
 	const line14 = f1040.amount('14', 'Add lines 12e, 13a, and 13b', line12 + qbiDeduction);
 	const taxable = f1040.amount('15', 'Taxable income', Math.max(0, agi - line14), 'total');
+	if (netCapital < -constants.capitalLossLimit[status]) {
+		// Capital Loss Carryover Worksheet: only as much of the loss as offsets income is used up
+		const w1 = round2(agi - line14);
+		const w2 = -line7;
+		const used = Math.max(0, Math.min(w2, round2(w1 + w2)));
+		const carry = round2(-netCapital - used);
+		warnings.push(
+			`Capital loss of ${money(-netCapital)}: ${money(used)} is used this year${used < w2 ? ` (taxable income is ${money(w1)} before it, so the rest of the deduction gives no benefit)` : ''} and ${money(carry)} carries forward to ${input.year + 1} (not tracked).`
+		);
+	}
 	const usePreferential = qualifiedDividends > 0 || netLongTermGain > 0;
 	let line16: number;
 	if (usePreferential) {
@@ -598,17 +756,41 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	f1040.amount('17', 'Amount from Schedule 2, line 3', 0, 'input');
 	const line18 = f1040.amount('18', 'Add lines 16 and 17', line16);
 
+	// Schedule 8812 Part I: the child tax credit and credit for other dependents
 	const ctc = constants.childTaxCredit;
 	const otherDependents = Math.max(0, input.dependents - input.qualifyingChildren);
-	let credit = input.qualifyingChildren * ctc.perChild + otherDependents * ctc.perOtherDependent;
-	let creditDetail = `${input.qualifyingChildren} child(ren) × ${money(ctc.perChild)}${otherDependents ? ` plus ${otherDependents} other dependent(s) × ${money(ctc.perOtherDependent)}` : ''}`;
-	if (credit > 0 && agi > ctc.phaseOutStart[status]) {
-		const reduction = Math.ceil((agi - ctc.phaseOutStart[status]) / 1000) * ctc.reductionPerThousand;
-		credit = Math.max(0, credit - reduction);
-		creditDetail += `, reduced by ${money(reduction)} for AGI over ${money(ctc.phaseOutStart[status])}`;
+	const s8812 = input.dependents > 0 ? new FormBuilder('f1040s8', 'Schedule 8812', 'Credits for Qualifying Children and Other Dependents') : null;
+	let line19 = 0;
+	let ctcUnused = 0;
+	if (s8812) {
+		s8812.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
+		s8812.text('ssn', 'Your social security number', id.ssn);
+		const c1 = s8812.amount('1', 'Amount from Form 1040 line 11a', agi, 'input');
+		const c2d = s8812.amount('2d', 'Add lines 2a through 2c', 0);
+		const c3 = s8812.amount('3', 'Add lines 1 and 2d', c1 + c2d);
+		s8812.text('4', 'Qualifying children under age 17 with the required social security number', String(input.qualifyingChildren));
+		const c5 = s8812.amount('5', `Line 4 × ${money(ctc.perChild)}`, input.qualifyingChildren * ctc.perChild);
+		s8812.text('6', 'Other dependents', String(otherDependents));
+		const c7 = s8812.amount('7', `Line 6 × ${money(ctc.perOtherDependent)}`, otherDependents * ctc.perOtherDependent);
+		const c8 = s8812.amount('8', 'Add lines 5 and 7', c5 + c7);
+		const c9 = s8812.amount('9', `Phase-out threshold for ${FILING_STATUS_LABELS[status].toLowerCase()}`, ctc.phaseOutStart[status], 'input');
+		const c10 = s8812.amount('10', 'Line 3 less line 9, rounded up to the next $1,000', c3 > c9 ? Math.ceil((c3 - c9) / 1000) * 1000 : 0);
+		const c11 = s8812.amount('11', `Line 10 × ${pct(ctc.reductionPerThousand / 1000)}`, (c10 / 1000) * ctc.reductionPerThousand);
+		const c12 = s8812.amount('12', 'Line 8 less line 11', Math.max(0, c8 - c11));
+		s8812.check(c12 > 0 ? '12:yes' : '12:no');
+		const c13 = s8812.amount('13', 'Credit Limit Worksheet A (Form 1040 line 18)', line18, 'input');
+		line19 = s8812.amount('14', 'Child tax credit and credit for other dependents', Math.min(c12, c13), 'result');
+		ctcUnused = round2(c12 - line19);
 	}
-	const line19 = f1040.amount('19', 'Child tax credit or credit for other dependents', Math.min(credit, line18), 'computed', credit ? creditDetail : undefined);
-	if (credit > line18) warnings.push(`Child tax credit of ${money(credit)} exceeds the tax; the refundable part (Schedule 8812) is not computed.`);
+	f1040.amount(
+		'19',
+		'Child tax credit or credit for other dependents',
+		line19,
+		'computed',
+		s8812
+			? `Schedule 8812: ${input.qualifyingChildren} child(ren) × ${money(ctc.perChild)}${otherDependents ? ` plus ${otherDependents} other dependent(s) × ${money(ctc.perOtherDependent)}` : ''}, limited to the tax on line 18`
+			: undefined
+	);
 	f1040.amount('20', 'Amount from Schedule 3, line 8', 0, 'input');
 	const line21 = f1040.amount('21', 'Add lines 19 and 20', line19);
 	const line22 = f1040.amount('22', 'Line 18 less line 21', Math.max(0, line18 - line21));
@@ -650,6 +832,79 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	const line25c = f1040.amount('25c', 'Federal income tax withheld from other forms', 0, 'input');
 	const line25d = f1040.amount('25d', 'Total withholding', line25a + line25b + line25c);
 	const line26 = f1040.amount('26', `${input.year} estimated tax payments`, input.estimatedPayments, 'input');
+
+	// Earned income for the refundable credits: wages plus Schedule C profit
+	// after the deductible half of self-employment tax
+	const earnedIncome = round2(line1z + totalNetProfit - seDeduction);
+
+	// The earned income credit, with Schedule EIC for the qualifying children
+	const eicChildren = input.dependentDetails.filter(
+		(d) => d.ssn !== '' && (d.monthsLived ?? 0) > 6 && (underAge(d, input.year, 19) || (d.status === 'student' && underAge(d, input.year, 24)) || d.status === 'disabled')
+	);
+	let eicChildCount = eicChildren.length;
+	if (eicChildCount === 0 && input.qualifyingChildren > 0) {
+		eicChildCount = input.qualifyingChildren;
+		warnings.push(
+			`The earned income credit assumes the ${input.qualifyingChildren} child(ren) counted for the child tax credit qualify; answer the dependent questions (name, social security number, year of birth, months lived with you) so Schedule EIC can be filled.`
+		);
+	}
+	const eicInvestmentIncome = round2(taxableInterest + input.interest.taxExempt + ordinaryDividends + Math.max(0, line7) + Math.max(0, input.scheduleENet));
+	const eic = earnedIncomeCredit(earnedIncome, agi, eicChildCount, eicInvestmentIncome, constants, status);
+	const line27a = f1040.amount('27a', 'Earned income credit (EIC)', eic.credit, 'input', eic.detail);
+	if (eic.credit > 0) {
+		warnings.push(
+			'Earned income credit: not checked are the age rule (25 to 64 without a qualifying child), the residency and social security number rules, and whether someone else could claim the same child.'
+		);
+	}
+	let scheduleEIC: FormBuilder | null = null;
+	if (eic.credit > 0 && eicChildren.length > 0) {
+		scheduleEIC = new FormBuilder('f1040sei', 'Schedule EIC', 'Earned Income Credit: Qualifying Child Information');
+		scheduleEIC.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
+		scheduleEIC.text('ssn', 'Your social security number', id.ssn);
+		eicChildren.slice(0, 3).forEach((d, i) => {
+			const n = i + 1;
+			scheduleEIC!.text(`1.name.${n}`, `Child ${n} name`, `${d.firstName} ${d.lastName}`.trim());
+			scheduleEIC!.text(`2.ssn.${n}`, `Child ${n} social security number`, d.ssn);
+			scheduleEIC!.text(`3.year.${n}`, `Child ${n} year of birth`, String(d.birthYear));
+			if (!underAge(d, input.year, 19)) {
+				const student = d.status === 'student' && underAge(d, input.year, 24);
+				scheduleEIC!.check(`4a.${student ? 'yes' : 'no'}.${n}`);
+				scheduleEIC!.check(`4b.yes.${n}`, !student && d.status === 'disabled');
+			}
+			scheduleEIC!.text(`5.rel.${n}`, `Child ${n} relationship`, d.relationship);
+			scheduleEIC!.text(`6.months.${n}`, `Child ${n} months lived with you`, String(Math.min(12, d.monthsLived ?? 0)));
+		});
+	}
+
+	// Schedule 8812 Part II: the additional child tax credit, the refundable part of what line 18 could not absorb
+	let line28 = 0;
+	if (s8812 && ctcUnused > 0 && input.qualifyingChildren > 0) {
+		const actc = constants.additionalChildTaxCredit;
+		const c16a = s8812.amount('16a', 'Line 12 less line 14', ctcUnused);
+		s8812.text('16b.count', 'Qualifying children for line 16b', String(input.qualifyingChildren));
+		const c16b = s8812.amount('16b', `${input.qualifyingChildren} qualifying child(ren) × ${money(actc.perChild)}`, input.qualifyingChildren * actc.perChild);
+		const c17 = s8812.amount('17', 'Smaller of line 16a or line 16b', Math.min(c16a, c16b));
+		const c18a = s8812.amount('18a', 'Earned income', earnedIncome, 'input', 'Wages plus Schedule C net profit, less the deductible part of self-employment tax');
+		const c19 = s8812.amount('19', `Line 18a less ${money(actc.earnedIncomeFloor)}`, Math.max(0, c18a - actc.earnedIncomeFloor));
+		s8812.check(c19 > 0 ? '19:yes' : '19:no');
+		const c20 = s8812.amount('20', `Line 19 × ${pct(actc.rate)}`, c19 * actc.rate);
+		let c26 = c20;
+		const threeOrMore = c16b >= 3 * actc.perChild;
+		s8812.check(threeOrMore ? '20:yes' : '20:no');
+		if (threeOrMore && c20 < c17) {
+			// Part II-B: payroll and self-employment taxes paid, less the EIC, can support a larger credit
+			const c21 = s8812.amount('21', 'Social security and Medicare tax withheld (W-2 boxes 4 and 6)', input.socialSecurityWages * 0.062 + input.medicareWages * 0.0145, 'input', 'Estimated from W-2 wages');
+			const c22 = s8812.amount('22', 'Schedule 1 line 15 and Schedule 2 lines 5, 6 and 13', seDeduction, 'input');
+			const c23 = s8812.amount('23', 'Add lines 21 and 22', c21 + c22);
+			const c24 = s8812.amount('24', 'Form 1040 line 27a and Schedule 3 line 11', line27a, 'input');
+			const c25 = s8812.amount('25', 'Line 23 less line 24', Math.max(0, c23 - c24));
+			c26 = s8812.amount('26', 'Larger of line 20 or line 25', Math.max(c20, c25));
+			if (input.socialSecurityWages > 0) warnings.push('Schedule 8812 line 21 estimates social security and Medicare tax withheld from W-2 wages; check it against boxes 4 and 6.');
+		}
+		line28 = s8812.amount('27', 'Additional child tax credit', Math.min(c17, c26), 'result');
+	}
+	f1040.amount('28', 'Additional child tax credit from Schedule 8812', line28, 'input');
+
 	let s3: FormBuilder | null = null;
 	let line31 = 0;
 	if (input.extensionPayment > 0) {
@@ -661,13 +916,14 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		line31 = s3.amount('15', 'Total other payments and refundable credits', s3Line10, 'total');
 	}
 	f1040.amount('31', 'Amount from Schedule 3, line 15', line31, 'input');
-	const line32 = f1040.amount('32', 'Total other payments and refundable credits', line31);
+	const line32 = f1040.amount('32', 'Total other payments and refundable credits', line27a + line28 + line31);
+	const refundableCredits = round2(line27a + line28);
 	const totalPayments = f1040.amount('33', 'Total payments', line25d + line26 + line32, 'total');
 	const refund = f1040.amount('34', 'Amount overpaid', Math.max(0, totalPayments - totalTax), 'result');
 	f1040.amount('35a', 'Amount of line 34 you want refunded to you', refund, 'result');
 	const owed = f1040.amount('37', 'Amount you owe', Math.max(0, totalTax - totalPayments), 'result');
 	if (owed > 0 && owed >= 1000) warnings.push('Amount owed is $1,000 or more; an underpayment penalty (Form 2210) may apply and is not computed.');
-	warnings.push('Not computed: alternative minimum tax, credits other than the child tax credit, deductions on Schedule 1-A, prior-year carryovers, and depreciation.');
+	warnings.push('Not computed: alternative minimum tax, credits other than the child tax credit and earned income credit, deductions on Schedule 1-A, prior-year carryovers, and depreciation.');
 
 	// Schedule B lists payers when there is any interest or dividend income
 	let scheduleB: FormBuilder | null = null;
@@ -700,7 +956,9 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	if (scheduleB) forms.push(scheduleB.form);
 	for (const { form } of scheduleCs) forms.push(form.form);
 	if (scheduleD) forms.push(scheduleD.form);
-	for (const se of scheduleSEs) forms.push(se.form);
+	for (const se of scheduleSEs) forms.push(se.form.form);
+	if (scheduleEIC) forms.push(scheduleEIC.form);
+	if (s8812) forms.push(s8812.form);
 	if (f8995) forms.push(f8995.form);
 
 	return {
@@ -718,6 +976,7 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 			incomeTax: line16,
 			selfEmploymentTax: seTax,
 			totalTax,
+			refundableCredits,
 			totalPayments,
 			refund,
 			amountOwed: owed,

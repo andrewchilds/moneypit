@@ -804,6 +804,7 @@ async function main() {
 				console.log(`  Income tax            ${money(s.incomeTax).padStart(14)}`);
 				if (s.selfEmploymentTax) console.log(`  Self-employment tax   ${money(s.selfEmploymentTax).padStart(14)}`);
 				console.log(`  Total tax             ${money(s.totalTax).padStart(14)}`);
+				if (s.refundableCredits) console.log(`  Refundable credits    ${money(s.refundableCredits).padStart(14)}`);
 				console.log(`  Payments              ${money(s.totalPayments).padStart(14)}`);
 				console.log(s.refund > 0 ? `  Refund                ${money(s.refund).padStart(14)}` : `  Amount owed           ${money(s.amountOwed).padStart(14)}`);
 				for (const form of computation.forms) {

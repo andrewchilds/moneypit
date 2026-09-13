@@ -65,6 +65,24 @@ export interface TaxYearConstants {
 		/** Credit drops by this much for each $1,000 (or part) of AGI over the start */
 		reductionPerThousand: number;
 	};
+	/** Schedule 8812 Part II-A: the refundable part is `rate` × earned income over `earnedIncomeFloor`, up to `perChild` */
+	additionalChildTaxCredit: { perChild: number; earnedIncomeFloor: number; rate: number };
+	earnedIncomeCredit: {
+		/** No credit when interest, dividends, capital gain and rental income exceed this */
+		investmentIncomeLimit: number;
+		/** Indexed by qualifying children: none, one, two, three or more */
+		byChildren: EarnedIncomeCreditRow[];
+	};
+}
+
+export interface EarnedIncomeCreditRow {
+	/** Credit is `rate` × earned income up to `earnedIncomeAmount`, so at most `maxCredit` */
+	rate: number;
+	earnedIncomeAmount: number;
+	maxCredit: number;
+	/** Above `phaseOutStart` (the larger of earned income or AGI) the credit drops by `phaseOutRate` per dollar */
+	phaseOutRate: number;
+	phaseOutStart: { single: number; mfj: number };
 }
 
 const same = (single: number, mfj: number, mfs = single, hoh = single): ByStatus => ({ single, mfj, mfs, hoh, qss: mfj });
@@ -102,7 +120,17 @@ const tax2025: TaxYearConstants = {
 		phaseDown: { threshold: same(500000, 500000, 250000), rate: 0.3, floor: same(10000, 10000, 5000) }
 	},
 	medicalFloorRate: 0.075,
-	childTaxCredit: { perChild: 2200, perOtherDependent: 500, phaseOutStart: same(200000, 400000), reductionPerThousand: 50 }
+	childTaxCredit: { perChild: 2200, perOtherDependent: 500, phaseOutStart: same(200000, 400000), reductionPerThousand: 50 },
+	additionalChildTaxCredit: { perChild: 1700, earnedIncomeFloor: 2500, rate: 0.15 },
+	earnedIncomeCredit: {
+		investmentIncomeLimit: 11950,
+		byChildren: [
+			{ rate: 0.0765, earnedIncomeAmount: 8490, maxCredit: 649, phaseOutRate: 0.0765, phaseOutStart: { single: 10620, mfj: 17730 } },
+			{ rate: 0.34, earnedIncomeAmount: 12730, maxCredit: 4328, phaseOutRate: 0.1598, phaseOutStart: { single: 23350, mfj: 30470 } },
+			{ rate: 0.4, earnedIncomeAmount: 17880, maxCredit: 7152, phaseOutRate: 0.2106, phaseOutStart: { single: 23350, mfj: 30470 } },
+			{ rate: 0.45, earnedIncomeAmount: 17880, maxCredit: 8046, phaseOutRate: 0.2106, phaseOutStart: { single: 23350, mfj: 30470 } }
+		]
+	}
 };
 
 const tax2024: TaxYearConstants = {
@@ -130,7 +158,17 @@ const tax2024: TaxYearConstants = {
 	qualifiedBusinessIncome: { rate: 0.2, threshold: same(191950, 383900), phaseInRange: same(50000, 100000) },
 	salt: { cap: same(10000, 10000, 5000), phaseDown: null },
 	medicalFloorRate: 0.075,
-	childTaxCredit: { perChild: 2000, perOtherDependent: 500, phaseOutStart: same(200000, 400000), reductionPerThousand: 50 }
+	childTaxCredit: { perChild: 2000, perOtherDependent: 500, phaseOutStart: same(200000, 400000), reductionPerThousand: 50 },
+	additionalChildTaxCredit: { perChild: 1700, earnedIncomeFloor: 2500, rate: 0.15 },
+	earnedIncomeCredit: {
+		investmentIncomeLimit: 11600,
+		byChildren: [
+			{ rate: 0.0765, earnedIncomeAmount: 8260, maxCredit: 632, phaseOutRate: 0.0765, phaseOutStart: { single: 10330, mfj: 17250 } },
+			{ rate: 0.34, earnedIncomeAmount: 12390, maxCredit: 4213, phaseOutRate: 0.1598, phaseOutStart: { single: 22720, mfj: 29640 } },
+			{ rate: 0.4, earnedIncomeAmount: 17400, maxCredit: 6960, phaseOutRate: 0.2106, phaseOutStart: { single: 22720, mfj: 29640 } },
+			{ rate: 0.45, earnedIncomeAmount: 17400, maxCredit: 7830, phaseOutRate: 0.2106, phaseOutStart: { single: 22720, mfj: 29640 } }
+		]
+	}
 };
 
 const TABLES: Record<number, TaxYearConstants> = { 2024: tax2024, 2025: tax2025 };

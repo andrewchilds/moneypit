@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { computeReturn, bracketTax, qualifiedDividendsAndCapitalGainTax, type ReturnInput, type BusinessInput } from '$lib/server/taxReturn/compute';
+import { computeReturn, bracketTax, earnedIncomeCredit, qualifiedDividendsAndCapitalGainTax, type ReturnInput, type BusinessInput, type DependentInput } from '$lib/server/taxReturn/compute';
 import { getTaxYearConstants } from '$lib/server/taxReturn/constants';
 import { formatFormAmount, shouldPrint } from '$lib/server/taxReturn/pdf';
 
@@ -46,6 +46,7 @@ function input(overrides: Partial<ReturnInput> = {}): ReturnInput {
 		},
 		dependents: 0,
 		qualifyingChildren: 0,
+		dependentDetails: [],
 		additionalDeductionBoxes: 0,
 		wages: 0,
 		socialSecurityWages: 0,
@@ -70,6 +71,13 @@ function input(overrides: Partial<ReturnInput> = {}): ReturnInput {
 
 const line = (result: ReturnType<typeof computeReturn>, formId: string, line: string, businessId?: string) =>
 	result.forms.find((f) => f.id === formId && (businessId === undefined || f.businessId === businessId))?.lines.find((l) => l.line === line)?.amount;
+const text = (result: ReturnType<typeof computeReturn>, formId: string, line: string) =>
+	result.forms.find((f) => f.id === formId)?.lines.find((l) => l.line === line)?.text;
+const checks = (result: ReturnType<typeof computeReturn>, formId: string) => result.forms.find((f) => f.id === formId)?.checks ?? [];
+
+function dependent(overrides: Partial<DependentInput> = {}): DependentInput {
+	return { firstName: 'Byron', lastName: 'Lovelace', ssn: '987-65-4321', relationship: 'Son', birthYear: 2014, monthsLived: 12, status: 'none', ...overrides };
+}
 
 describe('bracketTax', () => {
 	it('walks the 2025 single brackets', () => {
@@ -269,7 +277,16 @@ describe('computeReturn', () => {
 		expect(line(r, 'f1040sb', '1.amount.2')).toBe(250.5);
 		expect(line(r, 'f1040sb', '4')).toBe(650.5);
 		expect(line(r, 'f1040sb', '6')).toBe(2000);
-		expect(r.warnings.some((w) => w.includes('carries forward'))).toBe(true);
+		// 4,500 lost, 3,000 used against 50,000 of income, 1,500 carries forward
+		expect(r.warnings.some((w) => w.includes('3,000.00 is used this year') && w.includes('1,500.00 carries forward to 2026'))).toBe(true);
+	});
+
+	it('carries the whole capital loss forward when income is already below zero', () => {
+		const r = computeReturn(input({ wages: 5000, capitalGains: { shortTerm: -8000, longTerm: 0 } }), c2025);
+		expect(line(r, 'f1040', '7')).toBe(-3000);
+		expect(r.summary.taxableIncome).toBe(0);
+		// Taxable income before the loss is 5,000 − 15,750 = −10,750, so none of the 3,000 is used
+		expect(r.warnings.some((w) => w.includes('0.00 is used this year') && w.includes('8,000.00 carries forward'))).toBe(true);
 	});
 
 	it('adds qualified dividends to ordinary when the books split them', () => {
@@ -285,9 +302,53 @@ describe('computeReturn', () => {
 		const r = computeReturn(input({ filingStatus: 'mfj', wages: 410000, medicareWages: 410000, dependents: 3, qualifyingChildren: 2 }), c2025);
 		// 2 × 2,200 + 1 × 500 = 4,900, less 50 per 1,000 over 400,000 (AGI 410,000 → 500)
 		expect(line(r, 'f1040', '19')).toBe(4400);
+		expect(line(r, 'f1040s8', '10')).toBe(10000);
+		expect(line(r, 'f1040s8', '11')).toBe(500);
 		const small = computeReturn(input({ wages: 20000, dependents: 2, qualifyingChildren: 2 }), c2025);
 		expect(line(small, 'f1040', '19')).toBe(line(small, 'f1040', '18'));
-		expect(small.warnings.some((w) => w.includes('Schedule 8812'))).toBe(true);
+		// Tax on 4,250 is 425; the rest of the 4,400 credit is refundable up to 15% of (20,000 − 2,500) = 2,625, capped at 2 × 1,700
+		expect(line(small, 'f1040s8', '16a')).toBe(4400 - 425);
+		expect(line(small, 'f1040s8', '20')).toBe(2625);
+		expect(line(small, 'f1040s8', '27')).toBe(2625);
+		expect(line(small, 'f1040', '28')).toBe(2625);
+		expect(small.summary.refundableCredits).toBe(2625 + (line(small, 'f1040', '27a') ?? 0));
+	});
+
+	it('fills the dependents table and Schedule EIC from the dependent details', () => {
+		const r = computeReturn(
+			input({
+				filingStatus: 'mfj',
+				wages: 40000,
+				dependents: 2,
+				qualifyingChildren: 1,
+				dependentDetails: [dependent(), dependent({ firstName: 'Annabella', relationship: 'Daughter', birthYear: 2005, status: 'student', monthsLived: 8 })]
+			}),
+			c2025
+		);
+		expect(text(r, 'f1040', 'dep.first.1')).toBe('Byron');
+		expect(text(r, 'f1040', 'dep.rel.2')).toBe('Daughter');
+		const c = checks(r, 'f1040');
+		expect(c).toContain('dep.ctc.1');
+		expect(c).toContain('dep.odc.2');
+		expect(c).toContain('dep.student.2');
+		expect(c).toContain('dep.lived.2');
+		expect(c).not.toContain('dep.ctc.2');
+		// Both children qualify for the EIC: one under 19, one a student under 24
+		expect(text(r, 'f1040sei', '1.name.2')).toBe('Annabella Lovelace');
+		expect(text(r, 'f1040sei', '3.year.2')).toBe('2005');
+		expect(text(r, 'f1040sei', '6.months.2')).toBe('8');
+		expect(checks(r, 'f1040sei')).toContain('4a.yes.2');
+		expect(checks(r, 'f1040sei')).not.toContain('4a.no.1');
+		expect(line(r, 'f1040', '27a')).toBe(earnedIncomeCredit(40000, 40000, 2, 0, c2025, 'mfj').credit);
+		expect(r.forms.map((f) => f.id)).toEqual(['f1040', 'f1040s1', 'f1040s2', 'f1040sei', 'f1040s8']);
+	});
+
+	it('warns when dependents are counted but not described, and assumes the child tax credit children for the EIC', () => {
+		const r = computeReturn(input({ filingStatus: 'mfj', wages: 30000, dependents: 1, qualifyingChildren: 1 }), c2025);
+		expect(r.warnings.some((w) => w.includes('1 of the 1 dependent(s) have no name'))).toBe(true);
+		expect(r.warnings.some((w) => w.includes('assumes the 1 child(ren)'))).toBe(true);
+		expect(line(r, 'f1040', '27a')).toBeGreaterThan(0);
+		expect(r.forms.some((f) => f.id === 'f1040sei')).toBe(false);
 	});
 
 	it('applies the additional Medicare tax and net investment income tax over the thresholds', () => {
@@ -343,6 +404,104 @@ describe('computeReturn', () => {
 		const r = computeReturn(input({ year: 2024, wages: 50000 }), c2024);
 		expect(r.summary.deduction).toBe(14600);
 		expect(r.summary.incomeTax).toBe(bracketTax(35400, c2024, 'single'));
+	});
+});
+
+describe('earnedIncomeCredit', () => {
+	it('phases in, plateaus and phases out like the 2025 table', () => {
+		// One child, joint: 34% of earned income up to 12,730, flat to 30,470, then 15.98% down to zero at 57,554
+		expect(earnedIncomeCredit(10000, 10000, 1, 0, c2025, 'mfj').credit).toBe(Math.round(10025 * 0.34));
+		expect(earnedIncomeCredit(20000, 20000, 1, 0, c2025, 'mfj').credit).toBe(4328);
+		expect(earnedIncomeCredit(31736, -15000, 1, 0, c2025, 'mfj').credit).toBe(Math.round(4328 - (31725 - 30470) * 0.1598));
+		expect(earnedIncomeCredit(57600, 57600, 1, 0, c2025, 'mfj').credit).toBe(0);
+		// The phase-out uses the larger of earned income and AGI
+		expect(earnedIncomeCredit(20000, 57600, 1, 0, c2025, 'mfj').credit).toBe(0);
+		// Three or more children share a row; no children caps at 649
+		expect(earnedIncomeCredit(18000, 18000, 5, 0, c2025, 'mfj').credit).toBe(8046);
+		expect(earnedIncomeCredit(9000, 9000, 0, 0, c2025, 'single').credit).toBe(649);
+	});
+
+	it('is denied over the investment income limit and for separate filers', () => {
+		expect(earnedIncomeCredit(20000, 20000, 1, 12000, c2025, 'mfj').credit).toBe(0);
+		expect(earnedIncomeCredit(20000, 20000, 1, 11950, c2025, 'mfj').credit).toBe(4328);
+		expect(earnedIncomeCredit(20000, 20000, 1, 0, c2025, 'mfs').credit).toBe(0);
+		expect(earnedIncomeCredit(0, 20000, 1, 0, c2025, 'single').credit).toBe(0);
+	});
+});
+
+describe('self-employment deductions', () => {
+	it('limits the health insurance deduction to net self-employment earnings and moves the rest to Schedule A', () => {
+		const r = computeReturn(
+			input({
+				filingStatus: 'mfj',
+				businesses: [business({ owner: 'spouse', income: [{ line: '1', category: 'Gross Receipts', amount: 50000 }], expenses: [] })],
+				schedule1: [{ line: '17', category: 'Self-Employed Health Insurance', amount: 60000 }]
+			}),
+			c2025
+		);
+		// Net profit 50,000 less half of SE tax (50,000 × 92.35% × 15.3% / 2 = 3,532.39)
+		expect(line(r, 'f1040sse', '13')).toBe(3532.39);
+		expect(line(r, 'f1040s1', '17')).toBe(46467.61);
+		// The excess is medical on Schedule A, which still loses to the standard deduction
+		expect(r.forms.find((f) => f.id === 'f1040')?.lines.find((l) => l.line === '12e')?.detail).toContain('itemizing would give 13,532.39');
+		expect(r.warnings.some((w) => w.includes('13,532.39 was moved to Schedule A'))).toBe(true);
+		// QBI is the profit less both deductions: zero, so no carryforward and no deduction
+		expect(line(r, 'f8995', '1i.qbi')).toBe(0);
+		expect(line(r, 'f8995', '16')).toBe(0);
+		expect(r.summary.adjustedGrossIncome).toBe(0);
+	});
+
+	it('attributes the health insurance deduction to the business that can absorb it and carries a QBI loss forward', () => {
+		const r = computeReturn(
+			input({
+				businesses: [
+					business({ id: 'b1', name: 'Design', owner: 'spouse', income: [{ line: '1', category: 'Gross Receipts', amount: 40000 }], expenses: [] }),
+					business({ id: 'b2', name: 'Software', owner: 'taxpayer', income: [{ line: '1', category: 'Gross Receipts', amount: 1000 }], expenses: [{ line: '4', category: 'Cost of Goods Sold', amount: 400 }, { line: '8', category: 'Advertising', amount: 5000 }] })
+				],
+				schedule1: [{ line: '17', category: 'Self-Employed Health Insurance', amount: 20000 }]
+			}),
+			c2025
+		);
+		// Cost of goods sold lands on line 4 and in gross profit, not in line 28
+		expect(line(r, 'f1040sc', '4', 'b2')).toBe(400);
+		expect(line(r, 'f1040sc', '5', 'b2')).toBe(600);
+		expect(line(r, 'f1040sc', '28', 'b2')).toBe(5000);
+		expect(line(r, 'f1040sc', '31', 'b2')).toBe(-4400);
+		expect(r.warnings.some((w) => w.includes('does not know'))).toBe(false);
+		// The whole 20,000 fits under Design's earnings, so nothing moves to Schedule A
+		expect(line(r, 'f1040s1', '17')).toBe(20000);
+		expect(r.forms.some((f) => f.id === 'f1040sa')).toBe(false);
+		expect(r.warnings.some((w) => w.includes('assumed to be established under Design'))).toBe(true);
+		// Design's QBI is 40,000 − 2,825.91 − 20,000; Software's loss carries forward with what is left
+		expect(line(r, 'f1040sse', '13')).toBe(2825.91);
+		expect(line(r, 'f8995', '1i.qbi')).toBe(17174.09);
+		expect(line(r, 'f8995', '1ii.qbi')).toBe(-4400);
+		expect(line(r, 'f8995', '2')).toBe(12774.09);
+		expect(line(r, 'f8995', '16')).toBe(0);
+		const loss = computeReturn(input({ businesses: [business({ income: [], expenses: [{ line: '8', category: 'Advertising', amount: 5000 }] })] }), c2025);
+		expect(line(loss, 'f8995', '16')).toBe(-5000);
+		expect(loss.warnings.some((w) => w.includes('5,000.00 carries forward'))).toBe(true);
+	});
+
+	it('lists other expenses in Schedule C Part V', () => {
+		const r = computeReturn(input({ businesses: [business({ expenses: [{ line: '27', category: 'Subscriptions', amount: 1200 }, { line: '27b', category: 'Clothing', amount: 300 }] })] }), c2025);
+		expect(line(r, 'f1040sc', '27b')).toBe(1500);
+		expect(text(r, 'f1040sc', '48.desc.1')).toBe('Subscriptions');
+		expect(line(r, 'f1040sc', '48.amount.2')).toBe(300);
+		expect(line(r, 'f1040sc', '48')).toBe(1500);
+	});
+
+	it('does not let a negative AGI inflate the medical deduction', () => {
+		const r = computeReturn(input({ capitalGains: { shortTerm: -3000, longTerm: 0 }, itemized: { ...input().itemized, medical: 4000 } }), c2025);
+		expect(r.summary.adjustedGrossIncome).toBe(-3000);
+		expect(r.forms.find((f) => f.id === 'f1040')?.lines.find((l) => l.line === '12e')?.detail).toContain('itemizing would give 4,000.00');
+	});
+
+	it('notes a nontaxable retirement distribution needs Form 8606', () => {
+		const r = computeReturn(input({ retirement: { gross: 30000, taxable: 0 } }), c2025);
+		expect(line(r, 'f1040', '4a')).toBe(30000);
+		expect(line(r, 'f1040', '4b')).toBe(0);
+		expect(r.warnings.some((w) => w.includes('Form 8606'))).toBe(true);
 	});
 });
 
