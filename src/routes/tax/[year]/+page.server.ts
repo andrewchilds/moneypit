@@ -1,6 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { getTaxYearStatus } from '$lib/server/actions/taxYear';
-import { setTaxFact, deleteTaxFact, parseFactValue } from '$lib/server/actions/taxFacts';
+import { setTaxFact, deleteTaxFact, parseFactValue, setAccountShare, getTaxFact } from '$lib/server/actions/taxFacts';
 import {
 	getTaxDocument,
 	createTaxDocument,
@@ -94,6 +94,42 @@ export const actions: Actions = {
 			return { success: true };
 		} catch (e) {
 			return fail(400, { error: (e as Error).message, key });
+		}
+	},
+
+	// The business-use percentage of a personal account, edited from the
+	// business card: one entry of the business's shared_use_accounts answer
+	setShare: async ({ params, request, locals }) => {
+		const year = parseYear(params.year);
+		const data = await request.formData();
+		const businessId = (data.get('businessId') as string | null) || null;
+		const accountId = (data.get('accountId') as string | null)?.trim();
+		const percent = Number(data.get('percent'));
+		if (!accountId) return fail(400, { error: 'Account is required' });
+		if (!Number.isFinite(percent) || percent < 0 || percent > 100) return fail(400, { error: 'Percentage must be between 0 and 100' });
+		try {
+			await setAccountShare(locals.bookId, year, 'shared_use_accounts', businessId, accountId, percent);
+			// A share on file answers the gating question
+			if ((await getTaxFact(locals.bookId, year, 'shared_use', businessId))?.value !== true) {
+				await setTaxFact(locals.bookId, 'shared_use', true, year, businessId);
+			}
+			return { success: true };
+		} catch (e) {
+			return fail(400, { error: (e as Error).message });
+		}
+	},
+
+	removeShare: async ({ params, request, locals }) => {
+		const year = parseYear(params.year);
+		const data = await request.formData();
+		const businessId = (data.get('businessId') as string | null) || null;
+		const accountId = (data.get('accountId') as string | null)?.trim();
+		if (!accountId) return fail(400, { error: 'Account is required' });
+		try {
+			await setAccountShare(locals.bookId, year, 'shared_use_accounts', businessId, accountId, null);
+			return { success: true };
+		} catch (e) {
+			return fail(400, { error: (e as Error).message });
 		}
 	},
 

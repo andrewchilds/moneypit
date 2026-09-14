@@ -324,8 +324,12 @@ The same module has the shared expenses worksheet (Schedule C Line 25):
 personal accounts used partly for the business (phone, internet). The
 per-business answer `shared_use` gates `shared_use_accounts`, a question of
 type `account_shares` that carries a business-use percentage per account
-(`fact:set shared_use_accounts <id>:50,<id>:40 --business <b>`; the prep
-page renders a percent box per EXPENSE account). Each account's year total
+(`fact:set shared_use_accounts <id>:50,<id>:40 --business <b>`). On the
+prep page the answer is edited from the business card in the Businesses
+section: assigned accounts show at 100%, shared accounts show a percent
+box, and a row below adds a personal account with its percentage (which
+also answers `shared_use` yes); the questionnaire hides the question when
+a business owns it. Each account's year total
 times its percentage lands on the Utilities category, with no income limit.
 It runs before the home office worksheet so its figure counts among the
 "other expenses" in that worksheet's gross income limit. Allocation rows

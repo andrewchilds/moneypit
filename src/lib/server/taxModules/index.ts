@@ -14,6 +14,7 @@ export type {
 	WorksheetResult
 } from './types';
 export { taxModules } from './modules';
+export { asAccountIds, asAccountShares } from './values';
 
 import { taxModules } from './modules';
 import type { TaxModule, TaxQuestion, TaxWorksheet } from './types';

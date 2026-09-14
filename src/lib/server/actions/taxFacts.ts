@@ -1,7 +1,7 @@
 import { db } from '../db';
 import type { Prisma } from '@prisma/client';
 import { logOperation, serialize, diff } from './operationLog';
-import { findQuestion } from '../taxModules';
+import { findQuestion, asAccountShares } from '../taxModules';
 import type { AccountShare, FactValue, TaxQuestionType } from '../taxModules';
 
 export type { FactValue };
@@ -50,10 +50,14 @@ async function checkBusinessScope(bookId: string, key: string, businessId: strin
 	}
 }
 
-/** An `accounts` or `account_shares` answer must list accounts of this book. */
+/** An `accounts` or `account_shares` answer must list accounts of this book, with percentages from 0 to 100. */
 async function checkAccountIds(bookId: string, value: FactValue): Promise<void> {
 	if (!Array.isArray(value)) throw new Error('Expected a list of account ids');
 	const ids = value.map((v) => (typeof v === 'string' ? v : v.id));
+	for (const v of value) {
+		if (typeof v === 'string') continue;
+		if (!Number.isFinite(v.percent) || v.percent < 0 || v.percent > 100) throw new Error(`Percentage must be between 0 and 100, got ${v.percent}`);
+	}
 	const found = await db.account.findMany({ where: { bookId, id: { in: ids } }, select: { id: true } });
 	const known = new Set(found.map((a) => a.id));
 	const missing = ids.filter((id) => !known.has(id));
@@ -107,6 +111,29 @@ export async function setTaxFact(
 		{ entityType: 'TaxFact', entityId: result.id, before: null, after: serialize(created) }
 	]);
 	return created;
+}
+
+/**
+ * Add, change, or (with a null percent) remove one account's entry in an
+ * `account_shares` answer, leaving the other entries alone. The fact is
+ * deleted when no entries remain.
+ */
+export async function setAccountShare(
+	bookId: string,
+	year: number,
+	key: string,
+	businessId: string | null,
+	accountId: string,
+	percent: number | null
+) {
+	const existing = await getTaxFact(bookId, year, key, businessId);
+	const shares = asAccountShares(existing?.value as FactValue | undefined).filter((s) => s.id !== accountId);
+	if (percent !== null) shares.push({ id: accountId, percent });
+	if (shares.length === 0) {
+		if (existing) await deleteTaxFact(bookId, key, year, businessId);
+		return null;
+	}
+	return setTaxFact(bookId, key, shares, year, businessId);
 }
 
 export async function deleteTaxFact(bookId: string, key: string, year: number | null, businessId: string | null = null) {

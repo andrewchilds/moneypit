@@ -73,6 +73,19 @@
 	const unassignedAccounts = $derived(businesses.length > 0 ? data.businessAccounts.filter((a) => !a.businessId) : []);
 	const businessName = (id: string | null) => businesses.find((b) => b.id === id)?.name ?? null;
 
+	// Personal accounts a business uses partly: the business's account_shares
+	// answers, edited from its card rather than the questionnaire
+	const sharesOf = (businessId: string): Share[] =>
+		data.status.modules
+			.filter((m) => m.businessId === businessId)
+			.flatMap((m) => m.questions.filter((q) => q.type === "account_shares").flatMap(answeredShares));
+	const assignedIds = $derived(new Set(data.businessAccounts.filter((a) => a.businessId).map((a) => a.id)));
+	const sharableFor = (businessId: string) => {
+		const shared = new Set(sharesOf(businessId).map((s) => s.id));
+		return expenseAccounts.filter((a) => !assignedIds.has(a.id) && !shared.has(a.id));
+	};
+	const submitOnChange = (e: Event) => (e.currentTarget as HTMLInputElement).form?.requestSubmit();
+
 
 	function handleYearChange(event: Event) {
 		const select = event.target as HTMLSelectElement;
@@ -208,11 +221,12 @@
 							</div>
 						{/if}
 					</header>
-					{#if accountsOf(b.id).length > 0}
+					{#if accountsOf(b.id).length > 0 || sharesOf(b.id).length > 0}
 						<ul class="account-list">
 							{#each accountsOf(b.id) as a (a.id)}
 								<li>
 									<a href="/accounts/{a.id}">{a.path}</a>
+									<span class="share-fixed" title="Assigned to the business: the whole account is on its Schedule C">100%</span>
 									<form method="POST" action="?/assignAccount" use:enhance>
 										<input type="hidden" name="accountId" value={a.id} />
 										<input type="hidden" name="businessId" value="" />
@@ -220,10 +234,47 @@
 									</form>
 								</li>
 							{/each}
+							{#each sharesOf(b.id) as s (s.id)}
+								<li>
+									<a href="/accounts/{s.id}">{accountPath(s.id)}</a>
+									<form method="POST" action="?/setShare" use:enhance class="share-form">
+										<input type="hidden" name="businessId" value={b.id} />
+										<input type="hidden" name="accountId" value={s.id} />
+										<input
+											type="number"
+											name="percent"
+											min="0"
+											max="100"
+											step="1"
+											value={s.percent}
+											aria-label="Business-use percentage of {accountPath(s.id)}"
+											onchange={submitOnChange}
+										/>
+										<span class="share-unit">%</span>
+									</form>
+									<span class="share-note">shared</span>
+									<form method="POST" action="?/removeShare" use:enhance>
+										<input type="hidden" name="businessId" value={b.id} />
+										<input type="hidden" name="accountId" value={s.id} />
+										<button type="submit" class="link-button">remove</button>
+									</form>
+								</li>
+							{/each}
 						</ul>
 					{:else}
 						<p class="hint">No accounts assigned yet.</p>
 					{/if}
+					<form method="POST" action="?/setShare" use:enhance class="inline-form add-share">
+						<input type="hidden" name="businessId" value={b.id} />
+						<select name="accountId" required aria-label="Personal account shared with {b.name}">
+							<option value="">Share a personal account…</option>
+							{#each sharableFor(b.id) as a (a.id)}
+								<option value={a.id}>{a.path}</option>
+							{/each}
+						</select>
+						<input type="number" name="percent" min="0" max="100" step="1" placeholder="%" required aria-label="Business-use percentage" class="share-percent" />
+						<Button variant="secondary" size="sm" type="submit">Add</Button>
+					</form>
 				</article>
 			{/each}
 
@@ -269,7 +320,8 @@
 	{/if}
 
 	{#each data.status.modules as module (`${module.moduleId}:${module.businessId ?? ""}`)}
-		{@const visible = module.questions.filter((q) => q.visible)}
+		<!-- Account shares of a business are edited on its card above -->
+		{@const visible = module.questions.filter((q) => q.visible && !(q.type === "account_shares" && module.businessId))}
 		{@const scope = module.businessId ?? ""}
 		{#if visible.length > 0}
 			<section class="section">
@@ -766,6 +818,36 @@
 
 	.account-list a:hover {
 		color: var(--color-primary);
+	}
+
+	.share-fixed,
+	.share-note,
+	.share-unit {
+		font-size: 12px;
+		color: var(--color-text-muted);
+	}
+
+	.share-form {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+	}
+
+	.share-form input,
+	.add-share .share-percent {
+		width: 60px;
+		padding: 2px 6px;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		font-size: 13px;
+	}
+
+	.add-share {
+		margin-top: var(--spacing-sm);
+	}
+
+	.add-share select {
+		font-size: 13px;
 	}
 
 	.link-button {
