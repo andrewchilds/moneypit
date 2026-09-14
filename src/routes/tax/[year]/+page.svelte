@@ -8,7 +8,7 @@
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import Button from "$lib/components/ui/Button.svelte";
 	import Modal from "$lib/components/ui/Modal.svelte";
-	import type { PageData, ActionData } from "./$types";
+	import type { PageData, ActionData, SubmitFunction } from "./$types";
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -85,6 +85,7 @@
 		return expenseAccounts.filter((a) => !assignedIds.has(a.id) && !shared.has(a.id));
 	};
 	const submitOnChange = (e: Event) => (e.currentTarget as HTMLInputElement).form?.requestSubmit();
+	const keepValues: SubmitFunction = () => async ({ update }) => update({ reset: false });
 
 
 	function handleYearChange(event: Event) {
@@ -237,7 +238,8 @@
 							{#each sharesOf(b.id) as s (s.id)}
 								<li>
 									<a href="/accounts/{s.id}">{accountPath(s.id)}</a>
-									<form method="POST" action="?/setShare" use:enhance class="share-form">
+									<!-- Keep the typed percentage: the default enhance resets the form after saving -->
+									<form method="POST" action="?/setShare" use:enhance={keepValues} class="share-form">
 										<input type="hidden" name="businessId" value={b.id} />
 										<input type="hidden" name="accountId" value={s.id} />
 										<input
