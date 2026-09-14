@@ -138,8 +138,8 @@ DEMO
 ACCOUNTS
   account:list [--type <type>] [--prefix <path>] [--condensed]
   account:get <id>
-  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]
-  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]
+  account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>] [--business <id|name> [--percent <n>]]
+  account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--asset-type <type>] [--business <id|name|null> [--percent <n>]]
   account:delete <id>
   account:tree [--type <type>]
 
@@ -169,13 +169,14 @@ TAX MODULES
   module:enable <id>      Enable a module (seeds its categories)
   module:disable <id>     Disable a module (deletes unused categories)
 
-BUSINESSES (one Schedule C each; accounts, answers, and documents belong to one)
+BUSINESSES (one Schedule C each; answers and documents belong to one, accounts are attached at a percentage)
   business:list [--condensed]
-  business:get <id|name>
+  business:get <id|name>                With its accounts and the percentage of each
   business:create <name>                First business adopts existing Schedule C accounts and answers
   business:update <id|name> --name <name>
-  business:delete <id|name>             Unassigns its accounts and documents; deletes its answers
-  business:assign <id|name> <account-ids...>
+  business:delete <id|name>             Detaches its accounts, unassigns its documents; deletes its answers
+  business:assign <id|name> <account-ids...> [--percent <n>]   Attach at a percentage (default 100), or change it
+  business:unassign <id|name> <account-ids...>
 
 TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
@@ -281,10 +282,21 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
 A book can hold more than one sole proprietorship, each filing its own
 Schedule C. A **Business** is a named record the following attach to:
 
-- **Accounts** (`--business` on `account:create`/`account:update`, or
-  `business:assign`). The tax report shows one Schedule C section per
-  business, built from that business's accounts. Accounts with a Schedule C
-  category but no business land in a flagged "no business assigned" section.
+- **Accounts**, each at a percentage the business claims (`BusinessAccount`
+  rows: `business:assign <b> <ids> --percent <n>`, `business:unassign`,
+  `--business`/`--percent` on `account:create`/`account:update` where
+  `--business null` detaches from all, a percentage box per business on the
+  account form, and the business card on `/tax/<year>`). 100% is the
+  business's own account; less is a personal account used partly for it
+  (a phone at 40%); an account can be attached to several businesses. The
+  tax report shows one Schedule C section per business: an account whose
+  category is on Schedule C lands on that category in each attached
+  business's section at its percentage of the year total (the account row
+  carries `share` and shows "40% of $X"), and the rest of the account is
+  personal. An account whose category is not on Schedule C goes through the
+  shared expenses worksheet instead (below). Accounts with a Schedule C
+  category attached to no business land in a flagged "no business assigned"
+  section.
 - **Tax facts** for modules marked `perBusiness` (`us-schedule-c`). Those
   questions are asked once per business on `/tax/<year>`, and `fact:set`
   needs `--business` for them once the book has any business.
@@ -321,23 +333,21 @@ income less its other Schedule C expenses (Form 8829's gross income limit);
 the remainder is shown as a carryover. Depreciation is not computed.
 
 The same module has the shared expenses worksheet (Schedule C Line 25):
-personal accounts used partly for the business (phone, internet). The
-per-business answer `shared_use` gates `shared_use_accounts`, a question of
-type `account_shares` that carries a business-use percentage per account
-(`fact:set shared_use_accounts <id>:50,<id>:40 --business <b>`). On the
-prep page the answer is edited from the business card in the Businesses
-section: assigned accounts show at 100%, shared accounts show a percent
-box, and a row below adds a personal account with its percentage (which
-also answers `shared_use` yes); the questionnaire hides the question when
-a business owns it. Each account's year total
-times its percentage lands on the Utilities category, with no income limit.
-It runs before the home office worksheet so its figure counts among the
-"other expenses" in that worksheet's gross income limit. Allocation rows
-from both worksheets carry the account and the fraction claimed, and the
-report's `worksheetWarnings` (shown on `/reports/tax`, `worksheet:list`,
-and the return's warnings) flag an account allocated by two different
-worksheets (counted twice) and shares of one account that add up to more
-than 100% across businesses.
+personal expense accounts attached to the business (phone, internet) whose
+own tax category is not on Schedule C, so nothing else puts them on the
+section. It has no facts; the report passes it `shares` in `WorksheetInput`
+(those attachments as fractions), and each account's year total times its
+fraction lands on the Utilities category, with no income limit. It runs
+before the home office worksheet so its figure counts among the "other
+expenses" in that worksheet's gross income limit. Every attachment is a
+claim on its account, and the home office worksheet's allocation rows carry
+the account and the fraction claimed (the shared expenses rows do not, since
+the attachment already is the claim); `checkAccountClaims` in
+`src/lib/server/actions/reports.ts` produces the report's
+`worksheetWarnings` (shown on `/reports/tax`, `worksheet:list`, and the
+return's warnings): an account claimed by two different kinds of claim (a
+business and a worksheet, or two worksheets) is counted twice, and shares
+of one account that add up to more than 100% across businesses are flagged.
 
 ### Draft return
 

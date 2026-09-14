@@ -59,12 +59,30 @@ model Business {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  accounts     Account[]
+  accounts     BusinessAccount[]
   taxFacts     TaxFact[]
   taxDocuments TaxDocument[]
 
   @@unique([bookId, name])
   @@index([bookId])
+}
+
+// An account attached to a business with the percentage of it the business
+// claims: 100 for an account that is wholly the business's, less for a
+// personal account used partly for it (a phone). An account can be attached
+// to several businesses.
+model BusinessAccount {
+  id         String   @id @default(cuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  accountId  String
+  account    Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  percent    Decimal  @db.Decimal(5, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([businessId, accountId])
+  @@index([accountId])
 }
 
 model Account {
@@ -78,8 +96,6 @@ model Account {
   openingBalance Decimal?    @db.Decimal(12, 2) // Starting balance before any transactions
   taxCategoryId  String?
   taxCategory    TaxCategory? @relation(fields: [taxCategoryId], references: [id])
-  businessId     String?     // Which business this account belongs to, for per-business schedules
-  business       Business?   @relation(fields: [businessId], references: [id], onDelete: SetNull)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -91,6 +107,7 @@ model Account {
   rules              Rule[]
   balanceRecords     BalanceRecord[]
   taxDocuments       TaxDocument[]
+  businesses         BusinessAccount[]
 }
 
 model BalanceRecord {

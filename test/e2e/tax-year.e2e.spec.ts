@@ -44,15 +44,25 @@ interface TaxYearStatus {
 	missingDocuments: number;
 }
 
+interface TaxReportCategory {
+	taxCategoryName: string;
+	total: number;
+	documentTotal: number | null;
+	reportedTotal: number;
+	accounts: { id: string; total: number; share: number }[];
+	worksheets: { worksheetId: string; amount: number }[];
+}
+
 interface TaxReport {
 	sections: {
 		schedule: string;
 		hasDocuments: boolean;
-		incomeCategories: { taxCategoryName: string; total: number; documentTotal: number | null; reportedTotal: number }[];
-		expenseCategories: { taxCategoryName: string; total: number; documentTotal: number | null; reportedTotal: number }[];
+		incomeCategories: TaxReportCategory[];
+		expenseCategories: TaxReportCategory[];
 		totalIncome: number;
 		reportedIncome: number;
 	}[];
+	worksheetWarnings: string[];
 	openQuestions: number;
 	missingDocuments: number;
 	unmappedDocumentLines: number;
@@ -369,7 +379,7 @@ describe('Businesses', () => {
 		accountCount: number;
 	}
 	interface BusinessDetail extends Business {
-		accounts: { id: string; path: string }[];
+		accounts: { id: string; path: string; percent: number }[];
 	}
 	interface StatusWithBusinesses extends TaxYearStatus {
 		businesses: { id: string; name: string }[];
@@ -427,7 +437,10 @@ describe('Businesses', () => {
 		expect(alpha.accountCount).toBe(2);
 
 		const detail = runMpJsonWithBook<BusinessDetail>('business:get Alpha', bookId);
-		expect(detail.accounts.map((a) => a.path).sort()).toEqual(['Ads', 'Consulting']);
+		expect(detail.accounts.map((a) => [a.path, a.percent]).sort()).toEqual([
+			['Ads', 100],
+			['Consulting', 100]
+		]);
 
 		const fact = runMpJsonWithBook<TaxFact>(`fact:get business_owner --year 2025 --business ${alpha.id}`, bookId);
 		expect(fact.value).toBe('taxpayer');
@@ -490,6 +503,54 @@ describe('Businesses', () => {
 		expect(scheduleC(runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId)).some((s) => s.unassigned)).toBe(false);
 	});
 
+	it('splits an account attached to two businesses by percentage', () => {
+		// Ads (200) is Alpha's; give Beta 40% of it too, leaving Alpha 60%
+		runMpWithBook(`business:assign Alpha ${ads.id} --percent 60`, bookId);
+		runMpWithBook(`business:assign Beta ${ads.id} --percent 40`, bookId);
+		const { stdout } = runMpWithBook('account:list --condensed', bookId);
+		expect(stdout).toMatch(/Ads\t\[Alpha 60%, Beta 40%\]/);
+
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		const [alphaSection, betaSection] = scheduleC(report);
+		const alphaAds = alphaSection.expenseCategories.find((c) => c.taxCategoryName === 'Advertising')!;
+		const betaAds = betaSection.expenseCategories.find((c) => c.taxCategoryName === 'Advertising')!;
+		expect(alphaAds.total).toBe(120);
+		expect(alphaAds.accounts[0].share).toBe(0.6);
+		expect(betaAds.total).toBe(80);
+		expect(report.worksheetWarnings).toEqual([]);
+
+		// More than the whole account across businesses is flagged
+		runMpWithBook(`business:assign Beta ${ads.id} --percent 50`, bookId);
+		const over = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		expect(over.worksheetWarnings).toEqual(['110% of Ads is claimed across Alpha 60%, Beta 50%; the shares add up to more than the whole account.']);
+
+		runMpWithBook(`business:unassign Beta ${ads.id}`, bookId);
+		runMpWithBook(`business:assign Alpha ${ads.id}`, bookId);
+		expect(runMpJsonWithBook<BusinessDetail>('business:get Alpha', bookId).accounts.find((a) => a.id === ads.id)!.percent).toBe(100);
+	});
+
+	it('puts the business share of an attached personal account on Schedule C line 25', () => {
+		const phone = runMpJsonWithBook<Account>('account:create --type expense --path "Phone"', bookId);
+		runMpWithBook(`tx:create --date 2025-05-01 --description "Carrier" --amount 1000 --debit ${phone.id} --credit ${checking.id}`, bookId);
+		runMpWithBook(`business:assign Beta ${phone.id} --percent 30`, bookId);
+
+		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);
+		const betaSection = scheduleC(report).find((s) => s.businessName === 'Beta')!;
+		const utilities = betaSection.expenseCategories.find((c) => c.taxCategoryName === 'Utilities')!;
+		expect(utilities.reportedTotal).toBe(300);
+		expect(utilities.worksheets.map((w) => w.worksheetId)).toEqual(['shared-use']);
+		expect(report.worksheetWarnings).toEqual([]);
+		// The account itself is not on the section's own categories
+		expect(scheduleC(report).find((s) => s.businessName === 'Alpha')!.expenseCategories.some((c) => c.taxCategoryName === 'Utilities')).toBe(false);
+
+		runMpWithBook(`business:unassign Beta ${phone.id}`, bookId);
+		expect(
+			scheduleC(runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId))
+				.find((s) => s.businessName === 'Beta')!
+				.expenseCategories.some((c) => c.taxCategoryName === 'Utilities')
+		).toBe(false);
+	});
+
 	it('expects and matches per-business documents', () => {
 		runMpWithBook('fact:set received_1099_nec yes --year 2025 --business Beta', bookId);
 		let status = runMpJsonWithBook<StatusWithBusinesses>('tax:status --year 2025 --json', bookId);
@@ -541,7 +602,8 @@ describe('Businesses', () => {
 	it('deleting a business unassigns its accounts and drops its answers', () => {
 		const { stdout } = runMpWithBook('business:delete Alpha', bookId);
 		expect(stdout).toContain('Deleted business Alpha');
-		expect(runMpJsonWithBook<Account & { businessId: string | null }>(`account:get ${consulting.id}`, bookId).businessId).toBeNull();
+		expect(runMpWithBook('account:list --condensed', bookId).stdout).toMatch(/Consulting\n/);
+		expect(runMpWithBook('account:list --condensed', bookId).stdout).not.toMatch(/Consulting\t\[/);
 		expect(runMpWithBook(`fact:get business_owner --year 2025 --business ${beta.id}`, bookId).exitCode).toBe(0);
 
 		const report = runMpJsonWithBook<ReportWithBusinesses>('tax:report --year 2025', bookId);

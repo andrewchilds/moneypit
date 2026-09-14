@@ -18,7 +18,7 @@ const facts = {
 
 describe('home office worksheet', () => {
 	it('allocates each account by the office share of the home', () => {
-		const result = homeOfficeWorksheet.compute({ facts, accounts, section: { income: 50000, expenses: 5000 } });
+		const result = homeOfficeWorksheet.compute({ facts, accounts, shares: [], section: { income: 50000, expenses: 5000 } });
 		expect(result).not.toBeNull();
 		// 200/1300 = 15.3846%: rent 3692.31, electric 200.00
 		const allocations = result!.breakdown.filter((r) => r.kind === 'allocation');
@@ -32,31 +32,32 @@ describe('home office worksheet', () => {
 	});
 
 	it('caps the deduction at gross income less other expenses and carries the rest over', () => {
-		const result = homeOfficeWorksheet.compute({ facts, accounts, section: { income: 4000, expenses: 1500 } });
+		const result = homeOfficeWorksheet.compute({ facts, accounts, shares: [], section: { income: 4000, expenses: 1500 } });
 		expect(result!.breakdown.find((r) => r.kind === 'limit')?.amount).toBe(2500);
 		expect(result!.lines[0].amount).toBe(2500);
 		expect(result!.breakdown.find((r) => r.kind === 'carryover')?.amount).toBe(1392.31);
 	});
 
 	it('allows nothing when the business already shows a loss', () => {
-		const result = homeOfficeWorksheet.compute({ facts, accounts, section: { income: 500, expenses: 7000 } });
+		const result = homeOfficeWorksheet.compute({ facts, accounts, shares: [], section: { income: 500, expenses: 7000 } });
 		expect(result!.lines[0].amount).toBe(0);
 		expect(result!.breakdown.find((r) => r.kind === 'carryover')?.amount).toBe(3892.31);
 	});
 
 	it('produces nothing when there is no home office', () => {
-		expect(homeOfficeWorksheet.compute({ facts: { ...facts, home_office: false }, accounts, section: { income: 50000, expenses: 0 } })).toBeNull();
-		expect(homeOfficeWorksheet.compute({ facts: {}, accounts, section: { income: 50000, expenses: 0 } })).toBeNull();
+		expect(homeOfficeWorksheet.compute({ facts: { ...facts, home_office: false }, accounts, shares: [], section: { income: 50000, expenses: 0 } })).toBeNull();
+		expect(homeOfficeWorksheet.compute({ facts: {}, accounts, shares: [], section: { income: 50000, expenses: 0 } })).toBeNull();
 	});
 
 	it('produces nothing without square footage', () => {
-		expect(homeOfficeWorksheet.compute({ facts: { home_office: true, home_office_sqft: 200 }, accounts, section: { income: 1, expenses: 0 } })).toBeNull();
+		expect(homeOfficeWorksheet.compute({ facts: { home_office: true, home_office_sqft: 200 }, accounts, shares: [], section: { income: 1, expenses: 0 } })).toBeNull();
 	});
 
 	it('skips account ids that are not in the book', () => {
 		const result = homeOfficeWorksheet.compute({
 			facts: { ...facts, home_office_accounts: ['rent', 'gone'] },
 			accounts,
+			shares: [],
 			section: { income: 50000, expenses: 0 }
 		});
 		expect(result!.breakdown.filter((r) => r.kind === 'allocation').length).toBe(1);

@@ -1,5 +1,5 @@
 import type { FactValue, TaxModule, TaxWorksheet, WorksheetBreakdownRow } from '../types';
-import { asAccountIds, asAccountShares } from '../values';
+import { asAccountIds } from '../values';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -71,35 +71,33 @@ export const homeOfficeWorksheet: TaxWorksheet = {
 };
 
 /**
- * Personal expense accounts used partly for the business (phone, internet):
- * the business-use percentage of each account's year total, on Schedule C
- * line 25. Unlike the home office, there is no gross income limit.
+ * Personal accounts attached to the business at a percentage (phone,
+ * internet) whose own tax category is not on Schedule C: the business share
+ * of each account's year total, on Schedule C line 25. Unlike the home
+ * office, there is no gross income limit.
  */
 export const sharedUseWorksheet: TaxWorksheet = {
 	id: 'shared-use',
 	name: 'Business use of shared expenses',
 	description: 'The business-use percentage of personal accounts such as phone and internet, on Schedule C Line 25',
-	facts: ['shared_use', 'shared_use_accounts'],
-	compute({ facts, accounts }) {
-		if (facts.shared_use !== true) return null;
-		const shares = asAccountShares(facts.shared_use_accounts);
-		if (shares.length === 0) return null;
-
+	facts: [],
+	compute({ accounts, shares }) {
 		const breakdown: WorksheetBreakdownRow[] = [];
 		let total = 0;
-		for (const { id, percent } of shares) {
+		for (const { id, share } of shares) {
 			const account = accounts.find((a) => a.id === id);
-			if (!account) continue;
-			const ratio = Math.min(1, Math.max(0, percent / 100));
+			if (!account || account.type !== 'EXPENSE') continue;
+			const ratio = Math.min(1, Math.max(0, share));
 			const allocated = round2(account.total * ratio);
 			total = round2(total + allocated);
+			// No `share`: the attachment itself is the claim on the account,
+			// so the report's double-counting check already sees it
 			breakdown.push({
 				label: account.path,
 				detail: `${round2(ratio * 100)}% of ${account.total.toFixed(2)}`,
 				amount: allocated,
 				kind: 'allocation',
-				accountId: account.id,
-				share: ratio
+				accountId: account.id
 			});
 		}
 		if (breakdown.length === 0) return null;
@@ -208,22 +206,10 @@ export const usScheduleC: TaxModule = {
 		{
 			key: 'home_office_accounts',
 			prompt: 'Whole-home expense accounts to allocate to the office',
-			description: 'Rent, utilities, insurance: the office share of each year total goes on Schedule C Line 30',
+			description:
+				'Rent, utilities, insurance: the office share of each year total goes on Schedule C Line 30. Leave phone and internet to the business card, where a personal account is attached at a percentage, so nothing is counted twice',
 			type: 'accounts',
 			dependsOn: { key: 'home_office', value: true }
-		},
-		{
-			key: 'shared_use',
-			prompt: 'Were personal accounts such as phone or internet used partly for the business?',
-			type: 'boolean'
-		},
-		{
-			key: 'shared_use_accounts',
-			prompt: 'Shared expense accounts and the business-use percentage of each',
-			description:
-				'Phone, internet: that share of each year total goes on Schedule C Line 25. Leave whole-home costs to the home office question so nothing is counted twice',
-			type: 'account_shares',
-			dependsOn: { key: 'shared_use', value: true }
 		},
 		{
 			key: 'sep_contribution',

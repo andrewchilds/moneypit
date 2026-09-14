@@ -12,7 +12,8 @@ export type EntityType =
 	| 'TaxDocument'
 	| 'TaxDocumentLine'
 	| 'TaxFact'
-	| 'Business';
+	| 'Business'
+	| 'BusinessAccount';
 
 export interface Change {
 	entityType: EntityType;
@@ -140,6 +141,9 @@ async function entityExists(
 		case 'Business':
 			count = await tx.business.count({ where: { id } });
 			break;
+		case 'BusinessAccount':
+			count = await tx.businessAccount.count({ where: { id } });
+			break;
 	}
 	return count > 0;
 }
@@ -179,6 +183,9 @@ async function deleteEntity(
 			break;
 		case 'Business':
 			await tx.business.delete({ where: { id } });
+			break;
+		case 'BusinessAccount':
+			await tx.businessAccount.delete({ where: { id } });
 			break;
 	}
 }
@@ -253,6 +260,11 @@ async function recreateEntity(
 			delete cleanData.taxFacts;
 			delete cleanData.taxDocuments;
 			await tx.business.create({ data: cleanData as Prisma.BusinessUncheckedCreateInput });
+			break;
+		case 'BusinessAccount':
+			delete cleanData.account;
+			delete cleanData.business;
+			await tx.businessAccount.create({ data: cleanData as Prisma.BusinessAccountUncheckedCreateInput });
 			break;
 	}
 }
@@ -342,6 +354,11 @@ async function updateEntity(
 			delete cleanData.taxFacts;
 			delete cleanData.taxDocuments;
 			await tx.business.update({ where: { id }, data: cleanData as Prisma.BusinessUncheckedUpdateInput });
+			break;
+		case 'BusinessAccount':
+			delete cleanData.account;
+			delete cleanData.business;
+			await tx.businessAccount.update({ where: { id }, data: cleanData as Prisma.BusinessAccountUncheckedUpdateInput });
 			break;
 	}
 }

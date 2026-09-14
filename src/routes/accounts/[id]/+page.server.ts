@@ -2,7 +2,7 @@ import { parseLocalDate } from '$lib/utils/date';
 import { getAccount, updateAccount, deleteAccount, listAccounts } from '$lib/server/actions/accounts';
 import { listTransactionsWithBalance, categorizeTransactions, countTransactionsForAccount } from '$lib/server/actions/transactions';
 import { listTaxCategories } from '$lib/server/actions/taxCategories';
-import { listBusinesses } from '$lib/server/actions/businesses';
+import { listBusinesses, listAccountBusinesses, setAccountBusinesses, businessSharesFromForm } from '$lib/server/actions/businesses';
 import { listRulesForAccount, createRule, updateRule, deleteRule } from '$lib/server/actions/rules';
 import {
 	listBalanceRecords,
@@ -76,7 +76,7 @@ export async function load({ params, url, locals }) {
 	const year = yearParam ? parseInt(yearParam, 10) : undefined;
 	const { from, to } = getDateRange(currentRange, year);
 
-	const [transactionResult, taxCategories, balanceRecords, currentBalance, monthlyActivity, accounts, transactionCount, rules, businesses] = await Promise.all([
+	const [transactionResult, taxCategories, balanceRecords, currentBalance, monthlyActivity, accounts, transactionCount, rules, businesses, businessLinks] = await Promise.all([
 		listTransactionsWithBalance(params.id, { limit: 50, from, to }),
 		listTaxCategories(bookId),
 		listBalanceRecords(params.id),
@@ -85,7 +85,8 @@ export async function load({ params, url, locals }) {
 		listAccounts(bookId),
 		countTransactionsForAccount(params.id),
 		listRulesForAccount(params.id),
-		listBusinesses(bookId)
+		listBusinesses(bookId),
+		listAccountBusinesses(params.id)
 	]);
 
 	// Calculate displayed balance - either filtered range total or current balance
@@ -125,6 +126,7 @@ export async function load({ params, url, locals }) {
 		nextCursor,
 		taxCategories,
 		businesses: businesses.map((b) => ({ id: b.id, name: b.name })),
+		businessLinks: businessLinks.map((l) => ({ businessId: l.businessId, percent: l.percent })),
 		balanceRecords: balanceRecordsWithCalculated,
 		monthlyActivity,
 		accounts: accounts.map((a) => ({
@@ -156,7 +158,6 @@ export const actions = {
 		const openingBalanceStr = data.get('openingBalance') as string | null;
 		const last4Str = data.get('last4') as string | null;
 		const assetTypeStr = data.get('assetType') as string | null;
-		const businessIdStr = data.get('businessId') as string | null;
 
 		const openingBalance =
 			openingBalanceStr === '' ? null : openingBalanceStr ? parseFloat(openingBalanceStr) : undefined;
@@ -168,11 +169,13 @@ export const actions = {
 				type: type as 'ASSET' | 'LIABILITY' | 'EQUITY' | 'INCOME' | 'EXPENSE',
 				path: path?.trim() || undefined,
 				taxCategoryId: taxCategoryId || null,
-				...(businessIdStr !== null && { businessId: businessIdStr || null }),
 				...(openingBalance !== undefined && { openingBalance }),
 				...(last4 !== undefined && { last4 }),
 				...(type === 'ASSET' && { assetType })
 			});
+			// The form lists every business with a percentage box, so an
+			// income or expense account's attachments are exactly the filled ones
+			if (type === 'INCOME' || type === 'EXPENSE') await setAccountBusinesses(params.id, businessSharesFromForm(data));
 			return { success: true };
 		} catch (e) {
 			return fail(400, { error: (e as Error).message });

@@ -16,7 +16,7 @@
 		openingBalance = $bindable(''),
 		last4 = $bindable(''),
 		assetType = $bindable(''),
-		businessId = $bindable(''),
+		businessShares = $bindable({}),
 		taxCategories,
 		businesses = [],
 		error = null,
@@ -29,7 +29,8 @@
 		openingBalance: string;
 		last4: string;
 		assetType: string;
-		businessId?: string;
+		/** Percentage of the account each business claims, keyed by business id; blank or absent when not attached */
+		businessShares?: Record<string, string>;
 		taxCategories: TaxCategory[];
 		businesses?: { id: string; name: string }[];
 		error?: string | null;
@@ -56,7 +57,6 @@
 	const showAssetLiabilityFields = $derived(type === 'ASSET' || type === 'LIABILITY');
 	const showAssetType = $derived(type === 'ASSET');
 	const showBusiness = $derived(businesses.length > 0 && (type === 'INCOME' || type === 'EXPENSE'));
-	const businessOptions = $derived([{ value: '', label: 'None' }, ...businesses.map((b) => ({ value: b.id, label: b.name }))]);
 </script>
 
 <div class="form-group">
@@ -79,10 +79,20 @@
 
 {#if showBusiness}
 	<div class="form-group">
-		<label for="business">Business</label>
-		<Dropdown options={businessOptions} bind:value={businessId} />
-		<input type="hidden" name="businessId" value={businessId} />
-		<small class="hint">Which Schedule C this account reports on</small>
+		<span class="label">Businesses</span>
+		<div class="business-shares">
+			{#each businesses as b (b.id)}
+				<label class="business-share">
+					<span class="business-share-name">{b.name}</span>
+					<input type="number" name="business:{b.id}" min="1" max="100" step="1" bind:value={businessShares[b.id]} placeholder="—" />
+					<span class="business-share-unit">%</span>
+				</label>
+			{/each}
+		</div>
+		<small class="hint">
+			The percentage of this account each business claims on its Schedule C: 100 for the business's own account,
+			less for a personal account used partly for it. Leave blank to keep the account personal.
+		</small>
 	</div>
 {/if}
 
@@ -123,7 +133,8 @@
 		margin-bottom: var(--spacing-md);
 	}
 
-	.form-group label {
+	.form-group > label,
+	.form-group > .label {
 		display: block;
 		margin-bottom: var(--spacing-xs);
 		font-weight: 500;
@@ -132,6 +143,28 @@
 	.form-group input[type='text'],
 	.form-group input[type='number'] {
 		width: 100%;
+	}
+
+	.business-shares {
+		display: flex;
+		flex-direction: column;
+		gap: var(--spacing-xs);
+	}
+
+	.business-share {
+		display: grid;
+		grid-template-columns: 1fr 80px auto;
+		align-items: center;
+		gap: var(--spacing-xs);
+	}
+
+	.form-group .business-share input[type='number'] {
+		width: 80px;
+	}
+
+	.business-share-unit {
+		color: var(--color-text-muted);
+		font-size: 12px;
 	}
 
 	.hint {

@@ -1,6 +1,6 @@
 import { getAccountTree, createAccount, listAccounts, updateAccount } from '$lib/server/actions/accounts';
 import { listTaxCategories } from '$lib/server/actions/taxCategories';
-import { listBusinesses } from '$lib/server/actions/businesses';
+import { listBusinesses, setAccountBusinesses, businessSharesFromForm } from '$lib/server/actions/businesses';
 import { db } from '$lib/server/db';
 import type { AccountType, AssetType } from '@prisma/client';
 import { fail } from '@sveltejs/kit';
@@ -78,7 +78,6 @@ export const actions = {
 		const openingBalanceStr = data.get('openingBalance') as string | null;
 		const last4 = data.get('last4') as string | null;
 		const assetTypeStr = data.get('assetType') as string | null;
-		const businessId = data.get('businessId') as string | null;
 
 		if (!type || !path) {
 			return fail(400, { error: 'Type and path are required' });
@@ -92,9 +91,9 @@ export const actions = {
 				taxCategoryId: taxCategoryId || undefined,
 				openingBalance,
 				last4: last4 || undefined,
-				assetType,
-				businessId: businessId || undefined
+				assetType
 			});
+			await setAccountBusinesses(account.id, businessSharesFromForm(data));
 			return { success: true, account };
 		} catch (e) {
 			return fail(400, { error: (e as Error).message });

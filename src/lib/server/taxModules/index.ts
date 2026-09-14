@@ -4,17 +4,17 @@ export type {
 	TaxQuestion,
 	TaxQuestionType,
 	FactValue,
-	AccountShare,
 	FactExpectedDocument,
 	TaxWorksheet,
 	WorksheetInput,
 	WorksheetAccountFigure,
+	WorksheetAccountShare,
 	WorksheetLine,
 	WorksheetBreakdownRow,
 	WorksheetResult
 } from './types';
 export { taxModules } from './modules';
-export { asAccountIds, asAccountShares } from './values';
+export { asAccountIds } from './values';
 
 import { taxModules } from './modules';
 import type { TaxModule, TaxQuestion, TaxWorksheet } from './types';

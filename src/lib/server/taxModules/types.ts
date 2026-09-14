@@ -4,20 +4,10 @@ export interface TaxModuleCategory {
 	description?: string;
 }
 
-/**
- * `accounts` stores a list of account ids, picked from the book's EXPENSE
- * accounts; `account_shares` stores a percentage per account (the business
- * share of a phone bill, say) as `AccountShare[]`.
- */
-export type TaxQuestionType = 'boolean' | 'choice' | 'amount' | 'number' | 'date' | 'text' | 'accounts' | 'account_shares';
+/** `accounts` stores a list of account ids, picked from the book's EXPENSE accounts. */
+export type TaxQuestionType = 'boolean' | 'choice' | 'amount' | 'number' | 'date' | 'text' | 'accounts';
 
-/** One entry of an `account_shares` answer: an account and the percentage of it claimed */
-export interface AccountShare {
-	id: string;
-	percent: number;
-}
-
-export type FactValue = string | number | boolean | string[] | AccountShare[];
+export type FactValue = string | number | boolean | string[];
 
 /**
  * A question a module needs answered for a tax year. Answers are stored as
@@ -50,11 +40,24 @@ export interface WorksheetAccountFigure {
 	total: number;
 }
 
+/** An account attached to the business the worksheet runs for, and the fraction of it (0 to 1) the business claims */
+export interface WorksheetAccountShare {
+	id: string;
+	share: number;
+}
+
 export interface WorksheetInput {
 	/** Answers to the facts the worksheet declares, for the business it runs for */
 	facts: Partial<Record<string, FactValue>>;
 	/** Every income and expense account in the book with its year total */
 	accounts: WorksheetAccountFigure[];
+	/**
+	 * Accounts attached to the business whose own tax category is not on
+	 * the business's schedule (a personal phone account), so nothing has
+	 * put them on the section yet. Empty when the worksheet runs for no
+	 * business in particular.
+	 */
+	shares: WorksheetAccountShare[];
 	/**
 	 * Figures for the schedule section the worksheet feeds, before its own
 	 * output: what is reported as income and as other expenses.
@@ -78,7 +81,9 @@ export interface WorksheetBreakdownRow {
 	/**
 	 * On an allocation row, the account allocated and the fraction of its
 	 * total claimed (0 to 1), so the report can notice an account claimed by
-	 * two worksheets or more than once over across businesses.
+	 * two worksheets or more than once over across businesses. Leave `share`
+	 * off when the allocation is the business's own attachment to the
+	 * account, which the report already counts as a claim.
 	 */
 	accountId?: string;
 	share?: number;

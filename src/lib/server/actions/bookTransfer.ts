@@ -24,6 +24,7 @@ export interface BookExport {
 	taxDocuments?: ExportedTaxDocument[];
 	taxFacts?: ExportedTaxFact[];
 	businesses?: ExportedBusiness[];
+	businessAccounts?: ExportedBusinessAccount[];
 }
 
 interface ExportedBusiness {
@@ -84,7 +85,15 @@ interface ExportedAccount {
 	last4: string | null;
 	openingBalance: string | null;
 	taxCategoryId: string | null;
+	/** Older exports: the one business the account belonged to, wholly */
 	businessId?: string | null;
+}
+
+/** An account attached to a business at a percentage. Added later; absent in older exports */
+interface ExportedBusinessAccount {
+	accountId: string;
+	businessId: string;
+	percent: number;
 }
 
 interface ExportedRule {
@@ -144,7 +153,7 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 			taxModules: true,
 			taxDocuments: { include: { lines: true, file: true } },
 			taxFacts: true,
-			businesses: { orderBy: { createdAt: 'asc' } }
+			businesses: { orderBy: { createdAt: 'asc' }, include: { accounts: true } }
 		}
 	});
 
@@ -204,8 +213,7 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 			path: a.path,
 			last4: a.last4,
 			openingBalance: a.openingBalance?.toString() ?? null,
-			taxCategoryId: a.taxCategoryId,
-			businessId: a.businessId
+			taxCategoryId: a.taxCategoryId
 		})),
 		rules: book.rules.map((r) => ({
 			id: r.id,
@@ -259,7 +267,10 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 				: null
 		})),
 		taxFacts: book.taxFacts.map((f) => ({ year: f.year, key: f.key, value: f.value, businessId: f.businessId })),
-		businesses: book.businesses.map((b) => ({ id: b.id, name: b.name }))
+		businesses: book.businesses.map((b) => ({ id: b.id, name: b.name })),
+		businessAccounts: book.businesses.flatMap((b) =>
+			b.accounts.map((l) => ({ accountId: l.accountId, businessId: l.businessId, percent: Number(l.percent) }))
+		)
 	};
 }
 
@@ -343,11 +354,34 @@ export async function importBook(
 				path: a.path,
 				last4: a.last4,
 				openingBalance: a.openingBalance ? parseFloat(a.openingBalance) : null,
-				taxCategoryId: a.taxCategoryId ? taxCategoryIdMap.get(a.taxCategoryId) : null,
-				businessId: mapBusiness(a.businessId)
+				taxCategoryId: a.taxCategoryId ? taxCategoryIdMap.get(a.taxCategoryId) : null
 			}
 		});
 		accountIdMap.set(a.id, newAccount.id);
+	}
+
+	// Attach accounts to businesses: from the link list, or for older
+	// exports from the account's single business (wholly) and the
+	// shared_use_accounts answers (at their percentages)
+	const businessAccounts: ExportedBusinessAccount[] = data.businessAccounts ?? [];
+	for (const a of data.accounts) {
+		if (a.businessId && !businessAccounts.some((l) => l.accountId === a.id && l.businessId === a.businessId)) {
+			businessAccounts.push({ accountId: a.id, businessId: a.businessId, percent: 100 });
+		}
+	}
+	for (const f of data.taxFacts ?? []) {
+		if (f.key !== 'shared_use_accounts' || !f.businessId || !Array.isArray(f.value)) continue;
+		for (const v of f.value as { id?: unknown; percent?: unknown }[]) {
+			if (!v || typeof v !== 'object' || typeof v.id !== 'string' || !Number.isFinite(Number(v.percent))) continue;
+			if (businessAccounts.some((l) => l.accountId === v.id && l.businessId === f.businessId)) continue;
+			businessAccounts.push({ accountId: v.id, businessId: f.businessId, percent: Number(v.percent) });
+		}
+	}
+	for (const l of businessAccounts) {
+		const accountId = accountIdMap.get(l.accountId);
+		const businessId = mapBusiness(l.businessId);
+		if (!accountId || !businessId || !(l.percent > 0 && l.percent <= 100)) continue;
+		await db.businessAccount.create({ data: { accountId, businessId, percent: l.percent } });
 	}
 
 	// 3. Create rules
@@ -495,15 +529,11 @@ export async function importBook(
 		const type = findQuestion(key)?.question.type;
 		if (!Array.isArray(value)) return value;
 		if (type === 'accounts') return value.map((id) => (typeof id === 'string' ? (accountIdMap.get(id) ?? id) : id));
-		if (type === 'account_shares') {
-			return value.map((v) =>
-				typeof v === 'object' && v !== null && typeof v.id === 'string' ? { ...v, id: accountIdMap.get(v.id) ?? v.id } : v
-			);
-		}
 		return value;
 	};
 
-	const taxFacts = data.taxFacts ?? [];
+	// shared_use answers from older exports became attachments above
+	const taxFacts = (data.taxFacts ?? []).filter((f) => f.key !== 'shared_use' && f.key !== 'shared_use_accounts');
 	for (const f of taxFacts) {
 		await db.taxFact.create({
 			data: {

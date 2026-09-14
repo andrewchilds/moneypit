@@ -6,7 +6,10 @@ import { getTaxYearStatus } from './taxYear';
 import { getEnabledModules } from './taxModules';
 import { getTaxAccountTotals, overlayDocumentFigures, type OverlayRow } from './taxTotals';
 import { perBusinessSchedules, scheduleOf } from '../taxModules';
-import type { FactValue, WorksheetBreakdownRow, WorksheetLine } from '../taxModules';
+import type { FactValue, WorksheetAccountShare, WorksheetBreakdownRow, WorksheetLine } from '../taxModules';
+import { listBusinessAccounts } from './businesses';
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 export interface StackedBarSegment {
 	label: string;
@@ -269,36 +272,54 @@ export interface WorksheetRef {
 	breakdown: WorksheetBreakdownRow[];
 }
 
+/** An account attached to a business, for the claim check */
+export interface AccountClaim {
+	accountId: string;
+	path: string;
+	businessName: string;
+	/** Fraction of the account (0 to 1) the business claims */
+	share: number;
+}
+
 /**
- * Worksheets that allocate a share of an account (the home office by square
- * footage, shared expenses by percentage) tag each allocation row with the
- * account and the fraction claimed. Two different worksheets allocating the
- * same account count it twice; the same worksheet across businesses is fine
- * until the shares add up to more than the whole account.
+ * Each business claims a fraction of every account attached to it, and a
+ * worksheet that allocates a share of an account (the home office by square
+ * footage) tags each allocation row with the account and the fraction
+ * claimed. An account both attached to a business and allocated by a
+ * worksheet, or allocated by two different worksheets, is counted twice;
+ * claims of one kind across businesses are fine until they add up to more
+ * than the whole account.
  */
-export function checkWorksheetClaims(outputs: Pick<WorksheetOutput, 'worksheetId' | 'name' | 'businessName' | 'breakdown'>[]): string[] {
-	type Claim = { worksheetId: string; worksheet: string; business: string | null; share: number };
+export function checkAccountClaims(
+	outputs: Pick<WorksheetOutput, 'worksheetId' | 'name' | 'businessName' | 'breakdown'>[],
+	links: AccountClaim[] = []
+): string[] {
+	type Claim = { kind: string; source: string; share: number };
 	const claims = new Map<string, { path: string; claims: Claim[] }>();
+	const add = (accountId: string, path: string, claim: Claim) => {
+		const entry = claims.get(accountId) ?? { path, claims: [] };
+		entry.claims.push(claim);
+		claims.set(accountId, entry);
+	};
+	for (const link of links) add(link.accountId, link.path, { kind: 'business', source: link.businessName, share: link.share });
 	for (const output of outputs) {
 		for (const row of output.breakdown) {
 			if (row.kind !== 'allocation' || !row.accountId || row.share === undefined) continue;
-			const entry = claims.get(row.accountId) ?? { path: row.label, claims: [] };
-			entry.claims.push({ worksheetId: output.worksheetId, worksheet: output.name, business: output.businessName, share: row.share });
-			claims.set(row.accountId, entry);
+			const source = output.businessName ? `${output.name} (${output.businessName})` : output.name;
+			add(row.accountId, row.label, { kind: output.worksheetId, source, share: row.share });
 		}
 	}
 
-	const scope = (c: Claim) => (c.business ? `${c.worksheet} (${c.business})` : c.worksheet);
 	const percent = (share: number) => `${Math.round(share * 10000) / 100}%`;
 	const warnings: string[] = [];
 	for (const { path, claims: list } of claims.values()) {
-		const worksheets = new Set(list.map((c) => c.worksheetId));
-		if (worksheets.size > 1) {
-			warnings.push(`${path} is allocated by ${list.map((c) => `${scope(c)} at ${percent(c.share)}`).join(' and ')}; it is counted twice.`);
+		const kinds = new Set(list.map((c) => c.kind));
+		if (kinds.size > 1) {
+			warnings.push(`${path} is allocated by ${list.map((c) => `${c.source} at ${percent(c.share)}`).join(' and ')}; it is counted twice.`);
 		}
 		const total = list.reduce((sum, c) => sum + c.share, 0);
 		if (total > 1.0001) {
-			warnings.push(`${percent(total)} of ${path} is claimed across ${list.map((c) => `${scope(c)} ${percent(c.share)}`).join(', ')}; the shares add up to more than the whole account.`);
+			warnings.push(`${percent(total)} of ${path} is claimed across ${list.map((c) => `${c.source} ${percent(c.share)}`).join(', ')}; the shares add up to more than the whole account.`);
 		}
 	}
 	return warnings;
@@ -320,12 +341,19 @@ export interface WorksheetOutput {
 export interface TaxAccountTotal {
 	id: string;
 	path: string;
+	/** The account's year total times `share` */
 	total: number;
 	/**
 	 * Signed amount of this account's transactions left out of `total`
 	 * because their other side is a retirement account.
 	 */
 	excluded: number;
+	/**
+	 * Fraction of the account (0 to 1) counted here: the percentage at
+	 * which it is attached to the section's business, 1 when it is not
+	 * prorated.
+	 */
+	share: number;
 }
 
 /** One transaction behind a tax report figure, signed as it affected the total. */
@@ -466,7 +494,7 @@ export interface TaxReportData {
 	sections: ScheduleSection[];
 	// Module worksheets that produced figures, with their math
 	worksheets: WorksheetOutput[];
-	/** An account allocated by two worksheets, or more than 100% of it claimed across businesses */
+	/** An account claimed twice (attached to a business and allocated by a worksheet, or by two worksheets), or more than 100% of it claimed across businesses */
 	worksheetWarnings: string[];
 	// Non-deductible items (for reference)
 	nonDeductible: {
@@ -769,13 +797,25 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	// account belongs to once the book has businesses. Scope is the business
 	// id, '' for accounts on such a schedule with no business, or null when
 	// the schedule isn't split.
-	const businesses = await db.business.findMany({ where: { bookId }, orderBy: { createdAt: 'asc' } });
+	const [businesses, links] = await Promise.all([
+		db.business.findMany({ where: { bookId }, orderBy: { createdAt: 'asc' } }),
+		listBusinessAccounts(bookId)
+	]);
 	const businessNames = new Map(businesses.map((b) => [b.id, b.name]));
 	const splitSchedules = businesses.length > 0 ? perBusinessSchedules() : new Set<string>();
-	const scopeFor = (scheduleRef: string | null, businessId: string | null): string | null => {
+	const isSplit = (scheduleRef: string | null): boolean => {
 		const schedule = scheduleOf(scheduleRef);
-		return schedule !== null && splitSchedules.has(schedule) ? (businessId ?? '') : null;
+		return schedule !== null && splitSchedules.has(schedule);
 	};
+	const scopeFor = (scheduleRef: string | null, businessId: string | null): string | null =>
+		isSplit(scheduleRef) ? (businessId ?? '') : null;
+	// Each account's attachments: the businesses claiming it and their fractions
+	const linksByAccount = new Map<string, { businessId: string; share: number }[]>();
+	for (const l of links) {
+		const list = linksByAccount.get(l.accountId) ?? [];
+		list.push({ businessId: l.businessId, share: l.percent / 100 });
+		linksByAccount.set(l.accountId, list);
+	}
 	const scopeOfLine = (line: DocumentLineRef) => line.businessId ?? '';
 
 	// Document figures for a category within a scope
@@ -837,10 +877,19 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 				continue;
 			}
 
-			const cat = entryFor(account.taxCategory, scopeFor(account.taxCategory.scheduleRef, account.businessId));
-			cat.total += total;
-			cat.reportedTotal = cat.total;
-			cat.accounts.push({ id: account.id, path: account.path, total, excluded });
+			// On a split schedule each business attached to the account gets
+			// its share of the total in its own section; an account attached
+			// to no business lands in the unassigned section whole.
+			const claims: { scope: string | null; share: number }[] = isSplit(account.taxCategory.scheduleRef)
+				? (linksByAccount.get(account.id)?.map((l) => ({ scope: l.businessId, share: l.share })) ?? [{ scope: '', share: 1 }])
+				: [{ scope: null, share: 1 }];
+			for (const { scope, share } of claims) {
+				const cat = entryFor(account.taxCategory, scope);
+				const counted = round2(total * share);
+				cat.total += counted;
+				cat.reportedTotal = cat.total;
+				cat.accounts.push({ id: account.id, path: account.path, total: counted, excluded: round2(excluded * share), share });
+			}
 		}
 
 		// Categories with document figures but no account activity still belong
@@ -860,7 +909,9 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 			const scope = key.startsWith('*|') ? null : key.slice(0, key.indexOf('|'));
 			const docs = cat.taxCategoryId ? documentsFor(cat.taxCategoryId, scope) : null;
 			if (docs) {
-				const rows = cat.accounts.flatMap((a) => rowsByAccount.get(a.id) ?? []);
+				const rows = cat.accounts.flatMap((a) =>
+					(rowsByAccount.get(a.id) ?? []).map((r) => (a.share === 1 ? r : { ...r, total: round2(r.total * a.share) }))
+				);
 				const overlay = overlayDocumentFigures(accountType, rows, docs.lines);
 				cat.documentTotal = docs.total;
 				cat.documentLines = docs.lines;
@@ -980,6 +1031,15 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 	// business for per-business modules.
 	const worksheets: WorksheetOutput[] = [];
 	const accountFigures = accounts.map((a) => ({ id: a.id, path: a.path, type: a.type as 'INCOME' | 'EXPENSE', total: totalMap.get(a.id) ?? 0 }));
+	// Accounts attached to a business that its section does not already
+	// count through their own category: personal accounts used partly for it
+	const sharesFor = (businessId: string | null): WorksheetAccountShare[] => {
+		if (!businessId) return [];
+		return links
+			.filter((l) => l.businessId === businessId)
+			.filter((l) => !isSplit(accounts.find((a) => a.id === l.accountId)?.taxCategory?.scheduleRef ?? null))
+			.map((l) => ({ id: l.accountId, share: l.percent / 100 }));
+	};
 	const sectionByKey = new Map(sections.map((s) => [s.key, s]));
 	const refreshSection = (section: ScheduleSection) => {
 		section.reportedIncome = section.incomeCategories.reduce((sum, c) => sum + c.reportedTotal, 0);
@@ -992,6 +1052,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		const facts: Partial<Record<string, FactValue>> = {};
 		for (const q of status.questions) if (q.answered && q.answer !== null) facts[q.key] = q.answer;
 
+		const shares = sharesFor(status.businessId);
 		for (const worksheet of module.worksheets) {
 			const inputs: Partial<Record<string, FactValue>> = {};
 			for (const key of worksheet.facts) if (facts[key] !== undefined) inputs[key] = facts[key];
@@ -999,7 +1060,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 			// A dry run tells us which category, and so which section, the
 			// worksheet feeds; the real run then gets that section's figures
 			// for its gross income limit.
-			const probe = worksheet.compute({ facts: inputs, accounts: accountFigures, section: { income: 0, expenses: 0 } });
+			const probe = worksheet.compute({ facts: inputs, accounts: accountFigures, shares, section: { income: 0, expenses: 0 } });
 			if (!probe || probe.lines.length === 0) continue;
 			const category = allCategories.find((c) => c.name === probe.lines[0].category);
 			const schedule = scheduleOf(category?.scheduleRef ?? null);
@@ -1012,6 +1073,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 			const result = worksheet.compute({
 				facts: inputs,
 				accounts: accountFigures,
+				shares,
 				section: { income: section.reportedIncome, expenses: section.reportedExpenses - (own?.reportedTotal ?? 0) }
 			});
 			if (!result) continue;
@@ -1065,7 +1127,15 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		dateRange: { from: startDate, to: endDate },
 		sections,
 		worksheets,
-		worksheetWarnings: checkWorksheetClaims(worksheets),
+		worksheetWarnings: checkAccountClaims(
+			worksheets,
+			links.map((l) => ({
+				accountId: l.accountId,
+				path: accounts.find((a) => a.id === l.accountId)?.path ?? l.accountId,
+				businessName: businessNames.get(l.businessId) ?? l.businessId,
+				share: l.percent / 100
+			}))
+		),
 		nonDeductible: {
 			expenses: expenseGrouped.nonDeductible,
 			income: incomeGrouped.nonDeductible

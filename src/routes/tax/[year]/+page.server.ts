@@ -1,6 +1,6 @@
 import { error, fail } from '@sveltejs/kit';
 import { getTaxYearStatus } from '$lib/server/actions/taxYear';
-import { setTaxFact, deleteTaxFact, parseFactValue, setAccountShare, getTaxFact } from '$lib/server/actions/taxFacts';
+import { setTaxFact, deleteTaxFact, parseFactValue } from '$lib/server/actions/taxFacts';
 import {
 	getTaxDocument,
 	createTaxDocument,
@@ -10,9 +10,16 @@ import {
 	deleteDocumentLine,
 	attachUploadedFile
 } from '$lib/server/actions/taxDocuments';
-import { listAccounts, updateAccount } from '$lib/server/actions/accounts';
+import { listAccounts } from '$lib/server/actions/accounts';
 import { listTaxCategories } from '$lib/server/actions/taxCategories';
-import { createBusiness, updateBusiness, deleteBusiness } from '$lib/server/actions/businesses';
+import {
+	createBusiness,
+	updateBusiness,
+	deleteBusiness,
+	listBusinessAccounts,
+	setBusinessAccount,
+	removeBusinessAccount
+} from '$lib/server/actions/businesses';
 import { getEnabledModules } from '$lib/server/actions/taxModules';
 import { findQuestion, perBusinessSchedules, scheduleOf } from '$lib/server/taxModules';
 import { FORM_PRESETS } from '$lib/taxForms';
@@ -29,29 +36,32 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const { bookId } = locals;
 	const year = parseYear(params.year);
 
-	const [status, accounts, taxCategories, enabledModules] = await Promise.all([
+	const [status, accounts, taxCategories, enabledModules, businessAccounts] = await Promise.all([
 		getTaxYearStatus(bookId, year),
 		listAccounts(bookId),
 		listTaxCategories(bookId),
-		getEnabledModules(bookId)
+		getEnabledModules(bookId),
+		listBusinessAccounts(bookId)
 	]);
 
 	const currentYear = new Date().getFullYear();
 
-	// Accounts on a per-business schedule (Schedule C), so the page can show
-	// which belong to each business and which still need assigning.
+	// Accounts on a per-business schedule (Schedule C): those attached to no
+	// business still need one, since the report puts them in a section of
+	// their own.
 	const categoryById = new Map(taxCategories.map((c) => [c.id, c]));
 	const splitSchedules = perBusinessSchedules();
-	const businessAccounts = accounts
+	const scheduleAccountIds = accounts
 		.filter((a) => {
 			const schedule = scheduleOf(a.taxCategoryId ? (categoryById.get(a.taxCategoryId)?.scheduleRef ?? null) : null);
 			return schedule !== null && splitSchedules.has(schedule);
 		})
-		.map((a) => ({ id: a.id, path: a.path, type: a.type, businessId: a.businessId }));
+		.map((a) => a.id);
 
 	return {
 		hasPerBusinessModule: enabledModules.some((e) => e.module.perBusiness),
 		businessAccounts,
+		scheduleAccountIds,
 		status: {
 			...status,
 			// Decimal amounts can't cross the wire
@@ -76,15 +86,8 @@ export const actions: Actions = {
 		if (!key) return fail(400, { error: 'Question key is required' });
 
 		const question = findQuestion(key)?.question;
-		// A multi-select posts one value per chosen option; account shares
-		// post one "share:<account-id>" field per account, blank when not claimed
-		const raw =
-			question?.type === 'account_shares'
-				? Array.from(data.entries())
-						.filter(([name, v]) => name.startsWith('share:') && String(v).trim() !== '')
-						.map(([name, v]) => `${name.slice('share:'.length)}:${String(v).trim()}`)
-						.join(',')
-				: data.getAll('value').map(String).filter((v) => v.trim() !== '').join(',');
+		// A multi-select posts one value per chosen option
+		const raw = data.getAll('value').map(String).filter((v) => v.trim() !== '').join(',');
 		try {
 			if (raw.trim() === '') {
 				await deleteTaxFact(locals.bookId, key, year, businessId).catch(() => undefined);
@@ -94,42 +97,6 @@ export const actions: Actions = {
 			return { success: true };
 		} catch (e) {
 			return fail(400, { error: (e as Error).message, key });
-		}
-	},
-
-	// The business-use percentage of a personal account, edited from the
-	// business card: one entry of the business's shared_use_accounts answer
-	setShare: async ({ params, request, locals }) => {
-		const year = parseYear(params.year);
-		const data = await request.formData();
-		const businessId = (data.get('businessId') as string | null) || null;
-		const accountId = (data.get('accountId') as string | null)?.trim();
-		const percent = Number(data.get('percent'));
-		if (!accountId) return fail(400, { error: 'Account is required' });
-		if (!Number.isFinite(percent) || percent < 0 || percent > 100) return fail(400, { error: 'Percentage must be between 0 and 100' });
-		try {
-			await setAccountShare(locals.bookId, year, 'shared_use_accounts', businessId, accountId, percent);
-			// A share on file answers the gating question
-			if ((await getTaxFact(locals.bookId, year, 'shared_use', businessId))?.value !== true) {
-				await setTaxFact(locals.bookId, 'shared_use', true, year, businessId);
-			}
-			return { success: true };
-		} catch (e) {
-			return fail(400, { error: (e as Error).message });
-		}
-	},
-
-	removeShare: async ({ params, request, locals }) => {
-		const year = parseYear(params.year);
-		const data = await request.formData();
-		const businessId = (data.get('businessId') as string | null) || null;
-		const accountId = (data.get('accountId') as string | null)?.trim();
-		if (!accountId) return fail(400, { error: 'Account is required' });
-		try {
-			await setAccountShare(locals.bookId, year, 'shared_use_accounts', businessId, accountId, null);
-			return { success: true };
-		} catch (e) {
-			return fail(400, { error: (e as Error).message });
 		}
 	},
 
@@ -169,13 +136,30 @@ export const actions: Actions = {
 		}
 	},
 
-	assignAccount: async ({ request }) => {
+	// Attach an account to a business at a percentage, or change the
+	// percentage of one already attached
+	attachAccount: async ({ request }) => {
 		const data = await request.formData();
-		const accountId = data.get('accountId') as string;
 		const businessId = (data.get('businessId') as string | null) || null;
+		const accountId = (data.get('accountId') as string | null)?.trim();
+		const percent = Number(data.get('percent') || 100);
+		if (!businessId) return fail(400, { error: 'Business is required' });
 		if (!accountId) return fail(400, { error: 'Account is required' });
 		try {
-			await updateAccount(accountId, { businessId });
+			await setBusinessAccount(businessId, accountId, percent);
+			return { success: true };
+		} catch (e) {
+			return fail(400, { error: (e as Error).message });
+		}
+	},
+
+	detachAccount: async ({ request }) => {
+		const data = await request.formData();
+		const businessId = (data.get('businessId') as string | null) || null;
+		const accountId = (data.get('accountId') as string | null)?.trim();
+		if (!businessId || !accountId) return fail(400, { error: 'Business and account are required' });
+		try {
+			await removeBusinessAccount(businessId, accountId);
 			return { success: true };
 		} catch (e) {
 			return fail(400, { error: (e as Error).message });

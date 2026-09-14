@@ -69,20 +69,20 @@
 	let renamingBusiness = $state<string | null>(null);
 	let renameValue = $state("");
 
-	const accountsOf = (businessId: string) => data.businessAccounts.filter((a) => a.businessId === businessId);
-	const unassignedAccounts = $derived(businesses.length > 0 ? data.businessAccounts.filter((a) => !a.businessId) : []);
+	// Accounts attached to each business with the percentage the business
+	// claims: 100% for its own accounts, less for a personal account used
+	// partly for it. An account can be attached to several businesses.
+	const linksOf = (businessId: string) => data.businessAccounts.filter((l) => l.businessId === businessId);
+	const attachedIds = $derived(new Set(data.businessAccounts.map((l) => l.accountId)));
+	// Schedule C accounts attached to no business: the report puts them in a section of their own
+	const unassignedAccounts = $derived(
+		businesses.length > 0 ? data.accounts.filter((a) => data.scheduleAccountIds.includes(a.id) && !attachedIds.has(a.id)) : []
+	);
 	const businessName = (id: string | null) => businesses.find((b) => b.id === id)?.name ?? null;
-
-	// Personal accounts a business uses partly: the business's account_shares
-	// answers, edited from its card rather than the questionnaire
-	const sharesOf = (businessId: string): Share[] =>
-		data.status.modules
-			.filter((m) => m.businessId === businessId)
-			.flatMap((m) => m.questions.filter((q) => q.type === "account_shares").flatMap(answeredShares));
-	const assignedIds = $derived(new Set(data.businessAccounts.filter((a) => a.businessId).map((a) => a.id)));
-	const sharableFor = (businessId: string) => {
-		const shared = new Set(sharesOf(businessId).map((s) => s.id));
-		return expenseAccounts.filter((a) => !assignedIds.has(a.id) && !shared.has(a.id));
+	const isScheduleAccount = (id: string) => data.scheduleAccountIds.includes(id);
+	const attachableTo = (businessId: string) => {
+		const attached = new Set(linksOf(businessId).map((l) => l.accountId));
+		return data.accounts.filter((a) => (a.type === "INCOME" || a.type === "EXPENSE") && !attached.has(a.id));
 	};
 	const submitOnChange = (e: Event) => (e.currentTarget as HTMLInputElement).form?.requestSubmit();
 	const keepValues: SubmitFunction = () => async ({ update }) => update({ reset: false });
@@ -105,13 +105,8 @@
 
 	const expenseAccounts = $derived(data.accounts.filter((a) => a.type === "EXPENSE"));
 	const accountPath = (id: string) => data.accounts.find((a) => a.id === id)?.path ?? id;
-	const answeredAccounts = (q: Question): string[] =>
-		Array.isArray(q.answer) ? q.answer.map((v) => (typeof v === "string" ? v : v.id)) : [];
-	type Share = { id: string; percent: number };
-	const answeredShares = (q: Question): Share[] =>
-		Array.isArray(q.answer) ? q.answer.filter((v): v is Share => typeof v === "object" && v !== null) : [];
-	const sharePercent = (q: Question, accountId: string): number | "" =>
-		answeredShares(q).find((s) => s.id === accountId)?.percent ?? "";
+	const accountType = (id: string) => data.accounts.find((a) => a.id === id)?.type;
+	const answeredAccounts = (q: Question): string[] => (Array.isArray(q.answer) ? q.answer : []);
 
 	function displayAnswer(q: Question): string {
 		if (q.answer === null) return "";
@@ -119,7 +114,6 @@
 		if (q.type === "choice") return q.options?.find((o) => o.value === q.answer)?.label ?? String(q.answer);
 		if (q.type === "amount") return formatCurrency(Number(q.answer));
 		if (q.type === "accounts") return answeredAccounts(q).map(accountPath).join(", ");
-		if (q.type === "account_shares") return answeredShares(q).map((s) => `${accountPath(s.id)} ${s.percent}%`).join(", ");
 		return String(q.answer);
 	}
 
@@ -176,8 +170,9 @@
 				<h2>Businesses</h2>
 			</div>
 			<p class="muted">
-				Each business files its own Schedule C. Accounts with Schedule C categories are assigned to one, and the
-				Schedule C questions below are asked once per business.
+				Each business files its own Schedule C. An account is attached to a business at the percentage the business
+				claims: its own accounts at 100%, a personal account it uses partly (phone, internet) at less, and an account
+				can be attached to more than one business. The Schedule C questions below are asked once per business.
 				{#if businesses.length === 0}
 					With no businesses, the book is treated as a single business.
 				{/if}
@@ -222,60 +217,60 @@
 							</div>
 						{/if}
 					</header>
-					{#if accountsOf(b.id).length > 0 || sharesOf(b.id).length > 0}
+					{#if linksOf(b.id).length > 0}
 						<ul class="account-list">
-							{#each accountsOf(b.id) as a (a.id)}
+							{#each linksOf(b.id) as l (l.accountId)}
 								<li>
-									<a href="/accounts/{a.id}">{a.path}</a>
-									<span class="share-fixed" title="Assigned to the business: the whole account is on its Schedule C">100%</span>
-									<form method="POST" action="?/assignAccount" use:enhance>
-										<input type="hidden" name="accountId" value={a.id} />
-										<input type="hidden" name="businessId" value="" />
-										<button type="submit" class="link-button">unassign</button>
-									</form>
-								</li>
-							{/each}
-							{#each sharesOf(b.id) as s (s.id)}
-								<li>
-									<a href="/accounts/{s.id}">{accountPath(s.id)}</a>
+									<a href="/accounts/{l.accountId}">{accountPath(l.accountId)}</a>
 									<!-- Keep the typed percentage: the default enhance resets the form after saving -->
-									<form method="POST" action="?/setShare" use:enhance={keepValues} class="share-form">
+									<form method="POST" action="?/attachAccount" use:enhance={keepValues} class="share-form">
 										<input type="hidden" name="businessId" value={b.id} />
-										<input type="hidden" name="accountId" value={s.id} />
+										<input type="hidden" name="accountId" value={l.accountId} />
 										<input
 											type="number"
 											name="percent"
-											min="0"
+											min="1"
 											max="100"
 											step="1"
-											value={s.percent}
-											aria-label="Business-use percentage of {accountPath(s.id)}"
+											value={l.percent}
+											aria-label="Percentage of {accountPath(l.accountId)} claimed by {b.name}"
 											onchange={submitOnChange}
 										/>
 										<span class="share-unit">%</span>
 									</form>
-									<span class="share-note">shared</span>
-									<form method="POST" action="?/removeShare" use:enhance>
+									{#if !isScheduleAccount(l.accountId)}
+										{#if accountType(l.accountId) === "EXPENSE"}
+											<span class="share-note" title="The account's own tax category is not on Schedule C, so its share goes on line 25 (Utilities)">
+												line 25
+											</span>
+										{:else}
+											<span class="share-note" title="Only expense accounts without a Schedule C category go on line 25; give the account a Schedule C category to report it">
+												not reported
+											</span>
+										{/if}
+									{/if}
+									<form method="POST" action="?/detachAccount" use:enhance>
 										<input type="hidden" name="businessId" value={b.id} />
-										<input type="hidden" name="accountId" value={s.id} />
-										<button type="submit" class="link-button">remove</button>
+										<input type="hidden" name="accountId" value={l.accountId} />
+										<button type="submit" class="link-button">detach</button>
 									</form>
 								</li>
 							{/each}
 						</ul>
 					{:else}
-						<p class="hint">No accounts assigned yet.</p>
+						<p class="hint">No accounts attached yet.</p>
 					{/if}
-					<form method="POST" action="?/setShare" use:enhance class="inline-form add-share">
+					<form method="POST" action="?/attachAccount" use:enhance class="inline-form add-share">
 						<input type="hidden" name="businessId" value={b.id} />
-						<select name="accountId" required aria-label="Personal account shared with {b.name}">
-							<option value="">Share a personal account…</option>
-							{#each sharableFor(b.id) as a (a.id)}
+						<select name="accountId" required aria-label="Account to attach to {b.name}">
+							<option value="">Attach an account…</option>
+							{#each attachableTo(b.id) as a (a.id)}
 								<option value={a.id}>{a.path}</option>
 							{/each}
 						</select>
-						<input type="number" name="percent" min="0" max="100" step="1" placeholder="%" required aria-label="Business-use percentage" class="share-percent" />
-						<Button variant="secondary" size="sm" type="submit">Add</Button>
+						<input type="number" name="percent" min="1" max="100" step="1" value="100" required aria-label="Percentage claimed" class="share-percent" />
+						<span class="share-unit">%</span>
+						<Button variant="secondary" size="sm" type="submit">Attach</Button>
 					</form>
 				</article>
 			{/each}
@@ -284,16 +279,17 @@
 				<div class="unassigned">
 					<p class="unassigned-title">
 						{unassignedAccounts.length} account{unassignedAccounts.length === 1 ? "" : "s"} with Schedule C categories
-						{unassignedAccounts.length === 1 ? "has" : "have"} no business. Pick one for each so the report splits correctly.
+						{unassignedAccounts.length === 1 ? "is" : "are"} attached to no business. Pick one for each so the report splits correctly.
 					</p>
 					<ul class="account-list">
 						{#each unassignedAccounts as a (a.id)}
 							<li>
 								<a href="/accounts/{a.id}">{a.path}</a>
-								<form method="POST" action="?/assignAccount" use:enhance class="inline-form">
+								<form method="POST" action="?/attachAccount" use:enhance class="inline-form">
 									<input type="hidden" name="accountId" value={a.id} />
+									<input type="hidden" name="percent" value="100" />
 									<select name="businessId" aria-label="Business for {a.path}" onchange={(e) => e.currentTarget.form?.requestSubmit()}>
-										<option value="">Assign to…</option>
+										<option value="">Attach to…</option>
 										{#each businesses as b (b.id)}
 											<option value={b.id}>{b.name}</option>
 										{/each}
@@ -322,8 +318,7 @@
 	{/if}
 
 	{#each data.status.modules as module (`${module.moduleId}:${module.businessId ?? ""}`)}
-		<!-- Account shares of a business are edited on its card above -->
-		{@const visible = module.questions.filter((q) => q.visible && !(q.type === "account_shares" && module.businessId))}
+		{@const visible = module.questions.filter((q) => q.visible)}
 		{@const scope = module.businessId ?? ""}
 		{#if visible.length > 0}
 			<section class="section">
@@ -380,17 +375,6 @@
 											<option value={a.id} selected={answeredAccounts(q).includes(a.id)}>{a.path}</option>
 										{/each}
 									</select>
-								{:else if q.type === "account_shares"}
-									<!-- A percentage per expense account; blank rows are not claimed -->
-									<div id="q-{q.key}-{scope}" class="account-shares">
-										{#each expenseAccounts as a (a.id)}
-											<label class="account-share">
-												<span class="account-share-path">{a.path}</span>
-												<input type="number" name="share:{a.id}" min="0" max="100" step="1" value={sharePercent(q, a.id)} placeholder="—" />
-												<span class="account-share-unit">%</span>
-											</label>
-										{/each}
-									</div>
 								{:else}
 									<input id="q-{q.key}-{scope}" type="text" name="value" value={formatAnswer(q)} />
 								{/if}
@@ -822,7 +806,6 @@
 		color: var(--color-primary);
 	}
 
-	.share-fixed,
 	.share-note,
 	.share-unit {
 		font-size: 12px;
@@ -939,42 +922,6 @@
 	.question-input .accounts-select {
 		width: 320px;
 		font-size: 13px;
-	}
-
-	.account-shares {
-		width: 320px;
-		max-height: 200px;
-		overflow-y: auto;
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-		padding: 4px;
-		border: 1px solid var(--color-border);
-		border-radius: var(--radius-sm);
-		font-size: 13px;
-	}
-
-	.account-share {
-		display: grid;
-		grid-template-columns: 1fr 64px auto;
-		align-items: center;
-		gap: var(--spacing-xs);
-	}
-
-	.account-share-path {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.question-input .account-share input {
-		width: 64px;
-		padding: 2px 6px;
-		font-size: 13px;
-	}
-
-	.account-share-unit {
-		color: var(--color-text-muted);
 	}
 
 	.current {

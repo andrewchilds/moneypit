@@ -37,7 +37,7 @@
 	let newAccountType = $state("EXPENSE");
 	let newAccountPath = $state("");
 	let newTaxCategory = $state("");
-	let newBusinessId = $state("");
+	let newBusinessShares = $state<Record<string, string>>({});
 	let newOpeningBalance = $state("");
 	let newLast4 = $state("");
 	let newAssetType = $state("");
@@ -115,7 +115,7 @@
 		showCreateModal = false;
 		newAccountPath = "";
 		newTaxCategory = "";
-		newBusinessId = "";
+		newBusinessShares = {};
 		newOpeningBalance = "";
 		newLast4 = "";
 		newAssetType = "";
@@ -332,7 +332,7 @@
 			bind:type={newAccountType}
 			bind:path={newAccountPath}
 			bind:taxCategoryId={newTaxCategory}
-			bind:businessId={newBusinessId}
+			bind:businessShares={newBusinessShares}
 			bind:openingBalance={newOpeningBalance}
 			bind:last4={newLast4}
 			bind:assetType={newAssetType}

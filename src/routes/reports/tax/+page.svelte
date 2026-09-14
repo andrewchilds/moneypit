@@ -199,6 +199,11 @@
 						{/if}
 						{account.path}
 					</span>
+					{#if account.share !== 1}
+						<span class="excluded-note" title="The percentage of the account attached to this business; the transactions below add up to the whole account">
+							{Math.round(account.share * 10000) / 100}% of {formatCurrencyPrecise(account.total / account.share)}
+						</span>
+					{/if}
 					{#if account.excluded !== 0}
 						<span class="excluded-note" title="Transactions whose other side is a retirement account are not counted">
 							excludes {formatCurrencyPrecise(account.excluded)} inside retirement accounts

@@ -34,7 +34,7 @@
 	let editType = $state('');
 	let editPath = $state('');
 	let editTaxCategory = $state('');
-	let editBusinessId = $state('');
+	let editBusinessShares = $state<Record<string, string>>({});
 	let editOpeningBalance = $state('');
 	let editLast4 = $state('');
 	let editAssetType = $state('');
@@ -130,7 +130,7 @@
 			editType = data.account.type;
 			editPath = data.account.path;
 			editTaxCategory = data.account.taxCategoryId ?? '';
-			editBusinessId = data.account.businessId ?? '';
+			editBusinessShares = Object.fromEntries(data.businessLinks.map((l) => [l.businessId, String(l.percent)]));
 			editOpeningBalance = data.account.openingBalance != null ? String(data.account.openingBalance) : '';
 			editLast4 = data.account.last4 ?? '';
 			editAssetType = data.account.assetType ?? '';
@@ -298,12 +298,12 @@
 						<span class="tax-category">Tax: {taxCat.name}</span>
 					{/if}
 				{/if}
-				{#if data.account.businessId}
-					{@const business = data.businesses.find((b) => b.id === data.account.businessId)}
+				{#each data.businessLinks as link (link.businessId)}
+					{@const business = data.businesses.find((b) => b.id === link.businessId)}
 					{#if business}
-						<span class="tax-category">Business: {business.name}</span>
+						<span class="tax-category">Business: {business.name}{link.percent === 100 ? '' : ` ${link.percent}%`}</span>
 					{/if}
-				{/if}
+				{/each}
 			</div>
 		</div>
 		<div class="header-actions">
@@ -522,7 +522,7 @@
 			bind:type={editType}
 			bind:path={editPath}
 			bind:taxCategoryId={editTaxCategory}
-			bind:businessId={editBusinessId}
+			bind:businessShares={editBusinessShares}
 			bind:openingBalance={editOpeningBalance}
 			bind:last4={editLast4}
 			bind:assetType={editAssetType}

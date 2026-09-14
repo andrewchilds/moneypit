@@ -139,6 +139,14 @@ async function resolveBusinessOpt(bookId: string, opts: Record<string, string | 
 	return (await businesses.resolveBusiness(bookId, raw)).id;
 }
 
+/** --percent <n>: the share of an account a business claims; 100 when not passed */
+function parsePercent(raw: string | boolean | undefined): number {
+	if (raw === undefined) return 100;
+	const n = Number(raw);
+	if (raw === true || raw === "" || !Number.isFinite(n)) throw new Error("--percent needs a number from 1 to 100");
+	return n;
+}
+
 function scopeLabel(m: { name: string; businessName: string | null }): string {
 	return m.businessName ? `${m.name} — ${m.businessName}` : m.name;
 }
@@ -150,9 +158,7 @@ function money(n: number): string {
 function formatFactValue(value: unknown): string {
 	if (typeof value === "boolean") return value ? "yes" : "no";
 	if (typeof value === "number") return String(value);
-	if (Array.isArray(value)) {
-		return value.map((v) => (typeof v === "object" && v !== null && "id" in v ? `${v.id}:${v.percent}%` : String(v))).join(", ");
-	}
+	if (Array.isArray(value)) return value.map(String).join(", ");
 	return String(value);
 }
 
@@ -241,8 +247,12 @@ async function main() {
 			const accountList = await accounts.listAccounts(bookId, filter);
 			if (opts.condensed) {
 				const businessNames = new Map((await businesses.listBusinesses(bookId)).map((b) => [b.id, b.name]));
+				const links = await businesses.listBusinessAccounts(bookId);
 				for (const account of accountList) {
-					const business = account.businessId ? `\t[${businessNames.get(account.businessId) ?? "?"}]` : "";
+					const tags = links
+						.filter((l) => l.accountId === account.id)
+						.map((l) => `${businessNames.get(l.businessId) ?? "?"}${l.percent === 100 ? "" : ` ${l.percent}%`}`);
+					const business = tags.length > 0 ? `\t[${tags.join(", ")}]` : "";
 					console.log(`${account.id}\t${account.type}\t${account.path}${business}`);
 				}
 			} else {
@@ -266,15 +276,16 @@ async function main() {
 			const path = opts.path as string;
 			if (!type || !path)
 				throw new Error(
-					"Usage: account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>] [--business <id|name>]"
+					"Usage: account:create --type <type> --path <path> [--tax-category <id>] [--last4 <digits>] [--asset-type <type>] [--business <id|name> [--percent <n>]]"
 				);
+			const businessId = await resolveBusinessOpt(bookId, opts);
 			const account = await accounts.createAccount(bookId, parseAccountType(type), path, {
 				taxCategoryId: opts["tax-category"] as string | undefined,
 				last4: opts["last4"] as string | undefined,
-				assetType: opts["asset-type"] ? (parseAssetType(opts["asset-type"] as string) ?? undefined) : undefined,
-				businessId: (await resolveBusinessOpt(bookId, opts)) ?? undefined
+				assetType: opts["asset-type"] ? (parseAssetType(opts["asset-type"] as string) ?? undefined) : undefined
 			});
-			json(account);
+			if (businessId) await businesses.setBusinessAccount(businessId, account.id, parsePercent(opts.percent));
+			json({ ...account, businesses: await businesses.listAccountBusinesses(account.id) });
 			break;
 		}
 
@@ -282,7 +293,7 @@ async function main() {
 			const id = positional[0];
 			if (!id)
 				throw new Error(
-					"Usage: account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--business <id|name>]"
+					"Usage: account:update <id> [--path <path>] [--tax-category <id>] [--opening-balance <amount>] [--last4 <digits>] [--business <id|name|null> [--percent <n>]]"
 				);
 			const data: {
 				path?: string;
@@ -290,13 +301,16 @@ async function main() {
 				openingBalance?: number | null;
 				last4?: string | null;
 				assetType?: AssetType | null;
-				businessId?: string | null;
 			} = {};
 			if (opts.path) data.path = opts.path as string;
+			// --business attaches the account to that business (at --percent,
+			// default 100) alongside any others; --business null detaches it from all
 			if (opts.business !== undefined) {
 				const existing = await accounts.getAccount(id);
 				if (!existing) throw new Error(`Account not found: ${id}`);
-				data.businessId = await resolveBusinessOpt(existing.bookId, opts);
+				const businessId = await resolveBusinessOpt(existing.bookId, opts);
+				if (businessId) await businesses.setBusinessAccount(businessId, id, parsePercent(opts.percent));
+				else await businesses.setAccountBusinesses(id, []);
 			}
 			if (opts["asset-type"] !== undefined) data.assetType = parseAssetType(opts["asset-type"] as string);
 			if (opts["tax-category"] !== undefined) {
@@ -890,8 +904,15 @@ async function main() {
 			const idOrName = positional[0];
 			if (!idOrName) throw new Error("Usage: business:get <id|name>");
 			const business = await businesses.resolveBusiness(bookId, idOrName);
-			const accountList = (await accounts.listAccounts(bookId)).filter((a) => a.businessId === business.id);
-			json({ ...business, accounts: accountList.map((a) => ({ id: a.id, type: a.type, path: a.path })) });
+			const links = (await businesses.listBusinessAccounts(bookId)).filter((l) => l.businessId === business.id);
+			const accountList = await accounts.listAccounts(bookId);
+			json({
+				...business,
+				accounts: links.flatMap((l) => {
+					const a = accountList.find((x) => x.id === l.accountId);
+					return a ? [{ id: a.id, type: a.type, path: a.path, percent: l.percent }] : [];
+				})
+			});
 			break;
 		}
 
@@ -928,20 +949,35 @@ async function main() {
 			if (!idOrName) throw new Error("Usage: business:delete <id|name>");
 			const business = await businesses.resolveBusiness(bookId, idOrName);
 			await businesses.deleteBusiness(business.id);
-			console.log(`Deleted business ${business.name}; its accounts and documents are now unassigned`);
+			console.log(`Deleted business ${business.name}; its accounts are detached and its documents have no business`);
 			break;
 		}
 
 		case "business:assign": {
 			const bookId = await resolveBookId(opts);
 			const [idOrName, ...accountIds] = positional;
-			if (!idOrName || accountIds.length === 0) throw new Error("Usage: business:assign <id|name> <account-ids...>");
+			if (!idOrName || accountIds.length === 0) throw new Error("Usage: business:assign <id|name> <account-ids...> [--percent <n>]");
+			const business = await businesses.resolveBusiness(bookId, idOrName);
+			const percent = parsePercent(opts.percent);
+			for (const accountId of accountIds) {
+				const account = await accounts.getAccount(accountId);
+				if (!account || account.bookId !== bookId) throw new Error(`Account not found: ${accountId}`);
+				await businesses.setBusinessAccount(business.id, accountId, percent);
+				console.log(`${account.path} -> ${business.name} at ${percent}%`);
+			}
+			break;
+		}
+
+		case "business:unassign": {
+			const bookId = await resolveBookId(opts);
+			const [idOrName, ...accountIds] = positional;
+			if (!idOrName || accountIds.length === 0) throw new Error("Usage: business:unassign <id|name> <account-ids...>");
 			const business = await businesses.resolveBusiness(bookId, idOrName);
 			for (const accountId of accountIds) {
 				const account = await accounts.getAccount(accountId);
 				if (!account || account.bookId !== bookId) throw new Error(`Account not found: ${accountId}`);
-				await accounts.updateAccount(accountId, { businessId: business.id });
-				console.log(`${account.path} -> ${business.name}`);
+				await businesses.removeBusinessAccount(business.id, accountId);
+				console.log(`${account.path} -/-> ${business.name}`);
 			}
 			break;
 		}
