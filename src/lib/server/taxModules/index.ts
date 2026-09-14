@@ -4,6 +4,7 @@ export type {
 	TaxQuestion,
 	TaxQuestionType,
 	FactValue,
+	AccountShare,
 	FactExpectedDocument,
 	TaxWorksheet,
 	WorksheetInput,

@@ -91,7 +91,13 @@
 
 	const expenseAccounts = $derived(data.accounts.filter((a) => a.type === "EXPENSE"));
 	const accountPath = (id: string) => data.accounts.find((a) => a.id === id)?.path ?? id;
-	const answeredAccounts = (q: Question): string[] => (Array.isArray(q.answer) ? q.answer : []);
+	const answeredAccounts = (q: Question): string[] =>
+		Array.isArray(q.answer) ? q.answer.map((v) => (typeof v === "string" ? v : v.id)) : [];
+	type Share = { id: string; percent: number };
+	const answeredShares = (q: Question): Share[] =>
+		Array.isArray(q.answer) ? q.answer.filter((v): v is Share => typeof v === "object" && v !== null) : [];
+	const sharePercent = (q: Question, accountId: string): number | "" =>
+		answeredShares(q).find((s) => s.id === accountId)?.percent ?? "";
 
 	function displayAnswer(q: Question): string {
 		if (q.answer === null) return "";
@@ -99,6 +105,7 @@
 		if (q.type === "choice") return q.options?.find((o) => o.value === q.answer)?.label ?? String(q.answer);
 		if (q.type === "amount") return formatCurrency(Number(q.answer));
 		if (q.type === "accounts") return answeredAccounts(q).map(accountPath).join(", ");
+		if (q.type === "account_shares") return answeredShares(q).map((s) => `${accountPath(s.id)} ${s.percent}%`).join(", ");
 		return String(q.answer);
 	}
 
@@ -319,6 +326,17 @@
 											<option value={a.id} selected={answeredAccounts(q).includes(a.id)}>{a.path}</option>
 										{/each}
 									</select>
+								{:else if q.type === "account_shares"}
+									<!-- A percentage per expense account; blank rows are not claimed -->
+									<div id="q-{q.key}-{scope}" class="account-shares">
+										{#each expenseAccounts as a (a.id)}
+											<label class="account-share">
+												<span class="account-share-path">{a.path}</span>
+												<input type="number" name="share:{a.id}" min="0" max="100" step="1" value={sharePercent(q, a.id)} placeholder="—" />
+												<span class="account-share-unit">%</span>
+											</label>
+										{/each}
+									</div>
 								{:else}
 									<input id="q-{q.key}-{scope}" type="text" name="value" value={formatAnswer(q)} />
 								{/if}
@@ -837,6 +855,42 @@
 	.question-input .accounts-select {
 		width: 320px;
 		font-size: 13px;
+	}
+
+	.account-shares {
+		width: 320px;
+		max-height: 200px;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		padding: 4px;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		font-size: 13px;
+	}
+
+	.account-share {
+		display: grid;
+		grid-template-columns: 1fr 64px auto;
+		align-items: center;
+		gap: var(--spacing-xs);
+	}
+
+	.account-share-path {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.question-input .account-share input {
+		width: 64px;
+		padding: 2px 6px;
+		font-size: 13px;
+	}
+
+	.account-share-unit {
+		color: var(--color-text-muted);
 	}
 
 	.current {

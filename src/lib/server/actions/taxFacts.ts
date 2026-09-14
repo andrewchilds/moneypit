@@ -2,7 +2,7 @@ import { db } from '../db';
 import type { Prisma } from '@prisma/client';
 import { logOperation, serialize, diff } from './operationLog';
 import { findQuestion } from '../taxModules';
-import type { FactValue, TaxQuestionType } from '../taxModules';
+import type { AccountShare, FactValue, TaxQuestionType } from '../taxModules';
 
 export type { FactValue };
 
@@ -50,12 +50,13 @@ async function checkBusinessScope(bookId: string, key: string, businessId: strin
 	}
 }
 
-/** An `accounts` answer must list accounts of this book. */
+/** An `accounts` or `account_shares` answer must list accounts of this book. */
 async function checkAccountIds(bookId: string, value: FactValue): Promise<void> {
 	if (!Array.isArray(value)) throw new Error('Expected a list of account ids');
-	const found = await db.account.findMany({ where: { bookId, id: { in: value } }, select: { id: true } });
+	const ids = value.map((v) => (typeof v === 'string' ? v : v.id));
+	const found = await db.account.findMany({ where: { bookId, id: { in: ids } }, select: { id: true } });
 	const known = new Set(found.map((a) => a.id));
-	const missing = value.filter((id) => !known.has(id));
+	const missing = ids.filter((id) => !known.has(id));
 	if (missing.length > 0) throw new Error(`Account not found in this book: ${missing.join(', ')}`);
 }
 
@@ -77,7 +78,7 @@ export async function setTaxFact(
 	const question = findQuestion(key)?.question;
 	const effectiveYear = question?.carryForward ? null : year;
 	await checkBusinessScope(bookId, key, businessId);
-	if (question?.type === 'accounts') await checkAccountIds(bookId, value);
+	if (question?.type === 'accounts' || question?.type === 'account_shares') await checkAccountIds(bookId, value);
 
 	const existing = await db.taxFact.findFirst({
 		where: { bookId, key, year: effectiveYear, businessId },
@@ -154,6 +155,21 @@ export function parseFactValue(raw: string, type?: TaxQuestionType, options?: { 
 			const ids = trimmed.split(/[\s,]+/).filter(Boolean);
 			if (ids.length === 0) throw new Error('Expected one or more account ids');
 			return ids;
+		}
+		case 'account_shares': {
+			// "id:50,id2:40" — an account id and the percentage of it claimed
+			const shares: AccountShare[] = [];
+			for (const entry of trimmed.split(/[\s,]+/).filter(Boolean)) {
+				const [id, rest, ...extra] = entry.split(':');
+				const percent = Number(rest?.replace('%', ''));
+				if (!id || rest === undefined || extra.length > 0 || !Number.isFinite(percent)) {
+					throw new Error(`Expected <account-id>:<percent> entries, got "${entry}"`);
+				}
+				if (percent < 0 || percent > 100) throw new Error(`Percentage must be between 0 and 100, got "${entry}"`);
+				shares.push({ id, percent });
+			}
+			if (shares.length === 0) throw new Error('Expected one or more <account-id>:<percent> entries');
+			return shares;
 		}
 		default: {
 			if (['true', 'false'].includes(trimmed.toLowerCase())) return trimmed.toLowerCase() === 'true';

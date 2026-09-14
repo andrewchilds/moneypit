@@ -1,4 +1,4 @@
-import type { FactValue, TaxModule, TaxWorksheet, WorksheetBreakdownRow } from '../types';
+import type { AccountShare, FactValue, TaxModule, TaxWorksheet, WorksheetBreakdownRow } from '../types';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -12,9 +12,22 @@ function asNumber(value: FactValue | undefined): number | null {
 }
 
 function asAccountIds(value: FactValue | undefined): string[] {
-	if (Array.isArray(value)) return value;
+	if (Array.isArray(value)) return value.map((v) => (typeof v === 'string' ? v : v.id));
 	if (typeof value === 'string') return value.split(',').map((s) => s.trim()).filter(Boolean);
 	return [];
+}
+
+/** The entries of an `account_shares` answer, dropping anything malformed */
+export function asAccountShares(value: FactValue | undefined): AccountShare[] {
+	if (!Array.isArray(value)) return [];
+	const shares: AccountShare[] = [];
+	for (const v of value) {
+		if (typeof v !== 'object' || v === null || typeof v.id !== 'string') continue;
+		const percent = Number(v.percent);
+		if (!Number.isFinite(percent)) continue;
+		shares.push({ id: v.id, percent });
+	}
+	return shares;
 }
 
 /**
@@ -49,7 +62,9 @@ export const homeOfficeWorksheet: TaxWorksheet = {
 				label: account.path,
 				detail: `${round2(ratio * 100)}% of ${account.total.toFixed(2)}`,
 				amount: allocated,
-				kind: 'allocation'
+				kind: 'allocation',
+				accountId: account.id,
+				share: ratio
 			});
 		}
 		breakdown.push({ label: 'Allowable home expenses', amount: allowable, kind: 'subtotal' });
@@ -70,6 +85,45 @@ export const homeOfficeWorksheet: TaxWorksheet = {
 		}
 
 		return { lines: [{ category: 'Home Office', amount: deduction }], breakdown };
+	}
+};
+
+/**
+ * Personal expense accounts used partly for the business (phone, internet):
+ * the business-use percentage of each account's year total, on Schedule C
+ * line 25. Unlike the home office, there is no gross income limit.
+ */
+export const sharedUseWorksheet: TaxWorksheet = {
+	id: 'shared-use',
+	name: 'Business use of shared expenses',
+	description: 'The business-use percentage of personal accounts such as phone and internet, on Schedule C Line 25',
+	facts: ['shared_use', 'shared_use_accounts'],
+	compute({ facts, accounts }) {
+		if (facts.shared_use !== true) return null;
+		const shares = asAccountShares(facts.shared_use_accounts);
+		if (shares.length === 0) return null;
+
+		const breakdown: WorksheetBreakdownRow[] = [];
+		let total = 0;
+		for (const { id, percent } of shares) {
+			const account = accounts.find((a) => a.id === id);
+			if (!account) continue;
+			const ratio = Math.min(1, Math.max(0, percent / 100));
+			const allocated = round2(account.total * ratio);
+			total = round2(total + allocated);
+			breakdown.push({
+				label: account.path,
+				detail: `${round2(ratio * 100)}% of ${account.total.toFixed(2)}`,
+				amount: allocated,
+				kind: 'allocation',
+				accountId: account.id,
+				share: ratio
+			});
+		}
+		if (breakdown.length === 0) return null;
+		breakdown.push({ label: 'Business share of shared expenses (Schedule C Line 25)', amount: total, kind: 'result' });
+
+		return { lines: [{ category: 'Utilities', amount: total }], breakdown };
 	}
 };
 
@@ -177,6 +231,19 @@ export const usScheduleC: TaxModule = {
 			dependsOn: { key: 'home_office', value: true }
 		},
 		{
+			key: 'shared_use',
+			prompt: 'Were personal accounts such as phone or internet used partly for the business?',
+			type: 'boolean'
+		},
+		{
+			key: 'shared_use_accounts',
+			prompt: 'Shared expense accounts and the business-use percentage of each',
+			description:
+				'Phone, internet: that share of each year total goes on Schedule C Line 25. Leave whole-home costs to the home office question so nothing is counted twice',
+			type: 'account_shares',
+			dependsOn: { key: 'shared_use', value: true }
+		},
+		{
 			key: 'sep_contribution',
 			prompt: 'SEP or solo 401(k) employer contribution for this year',
 			type: 'amount',
@@ -187,5 +254,7 @@ export const usScheduleC: TaxModule = {
 		{ formType: '1099-NEC', whenFact: { key: 'received_1099_nec', value: true }, reason: 'Client reported nonemployee compensation' },
 		{ formType: '1099-K', whenFact: { key: 'received_1099_k', value: true }, reason: 'Payment processor reported card receipts' }
 	],
-	worksheets: [homeOfficeWorksheet]
+	// Shared-use first: its line 25 figure is one of the "other expenses"
+	// the home office gross income limit is measured against
+	worksheets: [sharedUseWorksheet, homeOfficeWorksheet]
 };

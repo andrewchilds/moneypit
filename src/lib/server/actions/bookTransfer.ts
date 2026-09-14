@@ -492,8 +492,15 @@ export async function importBook(
 
 	// Answers that list account ids point at the new book's accounts
 	const mapFactValue = (key: string, value: unknown): unknown => {
-		if (findQuestion(key)?.question.type !== 'accounts' || !Array.isArray(value)) return value;
-		return value.map((id) => (typeof id === 'string' ? (accountIdMap.get(id) ?? id) : id));
+		const type = findQuestion(key)?.question.type;
+		if (!Array.isArray(value)) return value;
+		if (type === 'accounts') return value.map((id) => (typeof id === 'string' ? (accountIdMap.get(id) ?? id) : id));
+		if (type === 'account_shares') {
+			return value.map((v) =>
+				typeof v === 'object' && v !== null && typeof v.id === 'string' ? { ...v, id: accountIdMap.get(v.id) ?? v.id } : v
+			);
+		}
+		return value;
 	};
 
 	const taxFacts = data.taxFacts ?? [];

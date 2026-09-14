@@ -320,6 +320,21 @@ office ÷ total square footage. The sum is limited to the business's reported
 income less its other Schedule C expenses (Form 8829's gross income limit);
 the remainder is shown as a carryover. Depreciation is not computed.
 
+The same module has the shared expenses worksheet (Schedule C Line 25):
+personal accounts used partly for the business (phone, internet). The
+per-business answer `shared_use` gates `shared_use_accounts`, a question of
+type `account_shares` that carries a business-use percentage per account
+(`fact:set shared_use_accounts <id>:50,<id>:40 --business <b>`; the prep
+page renders a percent box per EXPENSE account). Each account's year total
+times its percentage lands on the Utilities category, with no income limit.
+It runs before the home office worksheet so its figure counts among the
+"other expenses" in that worksheet's gross income limit. Allocation rows
+from both worksheets carry the account and the fraction claimed, and the
+report's `worksheetWarnings` (shown on `/reports/tax`, `worksheet:list`,
+and the return's warnings) flag an account allocated by two different
+worksheets (counted twice) and shares of one account that add up to more
+than 100% across businesses.
+
 ### Draft return
 
 `src/lib/server/taxReturn/compute.ts` turns the report's figures into a

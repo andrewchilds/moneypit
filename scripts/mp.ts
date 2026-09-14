@@ -150,7 +150,9 @@ function money(n: number): string {
 function formatFactValue(value: unknown): string {
 	if (typeof value === "boolean") return value ? "yes" : "no";
 	if (typeof value === "number") return String(value);
-	if (Array.isArray(value)) return value.join(", ");
+	if (Array.isArray(value)) {
+		return value.map((v) => (typeof v === "object" && v !== null && "id" in v ? `${v.id}:${v.percent}%` : String(v))).join(", ");
+	}
 	return String(value);
 }
 
@@ -862,6 +864,11 @@ async function main() {
 						console.log(`  ${(row.kind === "allocation" ? "  " : "") + label.padEnd(60)} ${amount.padStart(14)}`);
 					}
 					for (const line of w.lines) console.log(`  → ${line.category}: ${money(line.amount)}`);
+				}
+				// Claims are checked across businesses, so the warnings are not filtered
+				if (report.worksheetWarnings.length > 0) {
+					console.log("\nCheck:");
+					for (const w of report.worksheetWarnings) console.log(`  ! ${w}`);
 				}
 				break;
 			}

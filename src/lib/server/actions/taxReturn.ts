@@ -89,6 +89,7 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 	if (report.uncategorizedExpenses.length + report.uncategorizedIncome.length > 0) {
 		notes.push(`${report.uncategorizedExpenses.length + report.uncategorizedIncome.length} account(s) with activity have no tax category and are not on the return.`);
 	}
+	notes.push(...report.worksheetWarnings);
 	// Documents: wages, withholding, and forms whose boxes have no category
 	const docs = status.documents.filter((d) => d.status === 'RECEIVED');
 	let wages = 0;

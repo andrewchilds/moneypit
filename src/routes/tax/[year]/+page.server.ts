@@ -72,12 +72,19 @@ export const actions: Actions = {
 		const year = parseYear(params.year);
 		const data = await request.formData();
 		const key = (data.get('key') as string | null)?.trim();
-		// A multi-select posts one value per chosen option
-		const raw = data.getAll('value').map(String).filter((v) => v.trim() !== '').join(',');
 		const businessId = (data.get('businessId') as string | null) || null;
 		if (!key) return fail(400, { error: 'Question key is required' });
 
 		const question = findQuestion(key)?.question;
+		// A multi-select posts one value per chosen option; account shares
+		// post one "share:<account-id>" field per account, blank when not claimed
+		const raw =
+			question?.type === 'account_shares'
+				? Array.from(data.entries())
+						.filter(([name, v]) => name.startsWith('share:') && String(v).trim() !== '')
+						.map(([name, v]) => `${name.slice('share:'.length)}:${String(v).trim()}`)
+						.join(',')
+				: data.getAll('value').map(String).filter((v) => v.trim() !== '').join(',');
 		try {
 			if (raw.trim() === '') {
 				await deleteTaxFact(locals.bookId, key, year, businessId).catch(() => undefined);

@@ -166,6 +166,13 @@
 		</div>
 	{/if}
 
+	{#each data.taxData.worksheetWarnings as warning (warning)}
+		<div class="warning-banner">
+			<AlertTriangle size={20} />
+			<span>{warning} <a href="/tax/{data.taxData.year}">Open tax prep</a></span>
+		</div>
+	{/each}
+
 	{#if data.taxData.retirementIncomeExcluded > 0}
 		<div class="info-banner">
 			<Info size={20} />

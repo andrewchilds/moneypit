@@ -269,6 +269,41 @@ export interface WorksheetRef {
 	breakdown: WorksheetBreakdownRow[];
 }
 
+/**
+ * Worksheets that allocate a share of an account (the home office by square
+ * footage, shared expenses by percentage) tag each allocation row with the
+ * account and the fraction claimed. Two different worksheets allocating the
+ * same account count it twice; the same worksheet across businesses is fine
+ * until the shares add up to more than the whole account.
+ */
+export function checkWorksheetClaims(outputs: Pick<WorksheetOutput, 'worksheetId' | 'name' | 'businessName' | 'breakdown'>[]): string[] {
+	type Claim = { worksheetId: string; worksheet: string; business: string | null; share: number };
+	const claims = new Map<string, { path: string; claims: Claim[] }>();
+	for (const output of outputs) {
+		for (const row of output.breakdown) {
+			if (row.kind !== 'allocation' || !row.accountId || row.share === undefined) continue;
+			const entry = claims.get(row.accountId) ?? { path: row.label, claims: [] };
+			entry.claims.push({ worksheetId: output.worksheetId, worksheet: output.name, business: output.businessName, share: row.share });
+			claims.set(row.accountId, entry);
+		}
+	}
+
+	const scope = (c: Claim) => (c.business ? `${c.worksheet} (${c.business})` : c.worksheet);
+	const percent = (share: number) => `${Math.round(share * 10000) / 100}%`;
+	const warnings: string[] = [];
+	for (const { path, claims: list } of claims.values()) {
+		const worksheets = new Set(list.map((c) => c.worksheetId));
+		if (worksheets.size > 1) {
+			warnings.push(`${path} is allocated by ${list.map((c) => `${scope(c)} at ${percent(c.share)}`).join(' and ')}; it is counted twice.`);
+		}
+		const total = list.reduce((sum, c) => sum + c.share, 0);
+		if (total > 1.0001) {
+			warnings.push(`${percent(total)} of ${path} is claimed across ${list.map((c) => `${scope(c)} ${percent(c.share)}`).join(', ')}; the shares add up to more than the whole account.`);
+		}
+	}
+	return warnings;
+}
+
 /** One run of a module worksheet, for one business on per-business modules */
 export interface WorksheetOutput {
 	worksheetId: string;
@@ -431,6 +466,8 @@ export interface TaxReportData {
 	sections: ScheduleSection[];
 	// Module worksheets that produced figures, with their math
 	worksheets: WorksheetOutput[];
+	/** An account allocated by two worksheets, or more than 100% of it claimed across businesses */
+	worksheetWarnings: string[];
 	// Non-deductible items (for reference)
 	nonDeductible: {
 		expenses: TaxCategoryTotal[];
@@ -1028,6 +1065,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		dateRange: { from: startDate, to: endDate },
 		sections,
 		worksheets,
+		worksheetWarnings: checkWorksheetClaims(worksheets),
 		nonDeductible: {
 			expenses: expenseGrouped.nonDeductible,
 			income: incomeGrouped.nonDeductible

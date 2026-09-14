@@ -4,10 +4,20 @@ export interface TaxModuleCategory {
 	description?: string;
 }
 
-/** `accounts` stores a list of account ids, picked from the book's EXPENSE accounts */
-export type TaxQuestionType = 'boolean' | 'choice' | 'amount' | 'number' | 'date' | 'text' | 'accounts';
+/**
+ * `accounts` stores a list of account ids, picked from the book's EXPENSE
+ * accounts; `account_shares` stores a percentage per account (the business
+ * share of a phone bill, say) as `AccountShare[]`.
+ */
+export type TaxQuestionType = 'boolean' | 'choice' | 'amount' | 'number' | 'date' | 'text' | 'accounts' | 'account_shares';
 
-export type FactValue = string | number | boolean | string[];
+/** One entry of an `account_shares` answer: an account and the percentage of it claimed */
+export interface AccountShare {
+	id: string;
+	percent: number;
+}
+
+export type FactValue = string | number | boolean | string[] | AccountShare[];
 
 /**
  * A question a module needs answered for a tax year. Answers are stored as
@@ -65,6 +75,13 @@ export interface WorksheetBreakdownRow {
 	amount: number | null;
 	/** What the row is, so the display can style inputs, results, and carryovers */
 	kind: 'input' | 'allocation' | 'subtotal' | 'limit' | 'result' | 'carryover';
+	/**
+	 * On an allocation row, the account allocated and the fraction of its
+	 * total claimed (0 to 1), so the report can notice an account claimed by
+	 * two worksheets or more than once over across businesses.
+	 */
+	accountId?: string;
+	share?: number;
 }
 
 export interface WorksheetResult {

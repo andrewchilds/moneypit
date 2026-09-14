@@ -73,7 +73,7 @@ BUSINESSES (one Schedule C each; accounts, answers, and documents belong to one)
 TAX YEAR (questions, documents, and figures that don't map to transactions)
   tax:status [--year <year>] [--json]   Open questions, expected documents, documents on hand
   tax:report [--year <year>]            Tax report data as JSON (book totals with document overlay)
-  worksheet:list [--year <year>] [--business <id|name>]   Print module worksheets (home office) with their math
+  worksheet:list [--year <year>] [--business <id|name>]   Print module worksheets (home office, shared expenses) with their math
   return:show [--year <year>] [--json]  Draft federal return: every form and line with the math behind it
   return:pdf <file> [--year <year>]     Write the draft return as filled IRS forms (one PDF)
   fact:list [--year <year>]             Questions from enabled modules with their answers
@@ -96,6 +96,8 @@ TAX DOCUMENTS (W-2, 1099s, 1098, 1095-A, ...)
   --year defaults to the most recently completed calendar year.
   Schedule C questions are answered per business once the book has one;
   pass --business to fact:set and to doc:add for 1099-NEC/1099-K forms.
+  An accounts answer takes account ids separated by commas; an account
+  shares answer takes <account-id>:<percent> entries (phone 50%, internet 40%).
   Document lines mapped to a tax category override the book total for that
   category in the tax report. Boxes listed by doc:forms get a label and a
   category automatically; --category overrides, --no-category leaves it unmapped.
