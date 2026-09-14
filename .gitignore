@@ -32,3 +32,6 @@ vite.config.ts.timestamp-*
 
 # Browser driver output
 /screenshots
+
+# Local tax records and plans
+/ignore
