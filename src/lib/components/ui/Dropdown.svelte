@@ -171,6 +171,20 @@
 		}
 	}
 
+	// Center the selected option in the list when the menu opens. Scrolls the
+	// list element directly rather than scrollIntoView so the page never moves.
+	// The action runs before the menu is in the document, so it waits a frame
+	// for layout.
+	function revealSelected(node: HTMLElement, selected: boolean) {
+		if (!selected) return;
+		requestAnimationFrame(() => {
+			const list = node.parentElement;
+			if (!list) return;
+			const top = node.offsetTop - list.offsetTop;
+			list.scrollTop = top - (list.clientHeight - node.offsetHeight) / 2;
+		});
+	}
+
 	function handleClickOutside(e: MouseEvent) {
 		if (containerRef && !containerRef.contains(e.target as Node)) {
 			open = false;
@@ -247,6 +261,7 @@
 							class:has-description={!!option.description}
 							role="option"
 							aria-selected={option.value === value}
+							use:revealSelected={option.value === value}
 							onclick={() => select(option)}
 						>
 							<span class="option-label">{option.label}</span>
