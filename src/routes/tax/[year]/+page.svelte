@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from "$app/forms";
 	import { goto } from "$app/navigation";
-	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, ChevronRight, Briefcase, FileUp, FileText, Crosshair, CircleCheck, CircleAlert, CircleDashed } from "lucide-svelte";
+	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, X, ChevronRight, Briefcase, FileUp, FileText, Crosshair, CircleCheck, CircleAlert, CircleDashed } from "lucide-svelte";
 	import { sniffFileText } from "$lib/pdf/client";
 	import { detectFormType } from "$lib/documentFigures";
 	import StatCard from "$lib/components/StatCard.svelte";
@@ -73,6 +73,15 @@
 	// claims: 100% for its own accounts, less for a personal account used
 	// partly for it. An account can be attached to several businesses.
 	const linksOf = (businessId: string) => data.businessAccounts.filter((l) => l.businessId === businessId);
+	const linkPercent = (businessId: string, accountId: string) =>
+		data.businessAccounts.find((l) => l.businessId === businessId && l.accountId === accountId)?.percent ?? 100;
+	// Detach confirmation: which attachment the X was clicked on
+	let detaching = $state<{ businessId: string; accountId: string } | null>(null);
+	const closeDetach: SubmitFunction = () =>
+		async ({ result, update }) => {
+			if (result.type === "success") detaching = null;
+			await update();
+		};
 	const attachedIds = $derived(new Set(data.businessAccounts.map((l) => l.accountId)));
 	// Schedule C accounts attached to no business: the report puts them in a section of their own
 	const unassignedAccounts = $derived(
@@ -220,7 +229,7 @@
 						{/if}
 					</header>
 					{#if linksOf(b.id).length > 0}
-						<ul class="account-list">
+						<ul class="account-list share-list">
 							{#each linksOf(b.id) as l (l.accountId)}
 								<li>
 									<a href="/accounts/{l.accountId}">{accountPath(l.accountId)}</a>
@@ -240,22 +249,26 @@
 										/>
 										<span class="share-unit">%</span>
 									</form>
-									{#if !isScheduleAccount(l.accountId)}
-										{#if accountType(l.accountId) === "EXPENSE"}
-											<span class="share-note" title="The account's own tax category is not on Schedule C, so its share goes on line 25 (Utilities)">
-												line 25
-											</span>
-										{:else}
-											<span class="share-note" title="Only expense accounts without a Schedule C category go on line 25; give the account a Schedule C category to report it">
-												not reported
-											</span>
-										{/if}
+									{#if isScheduleAccount(l.accountId)}
+										<span class="share-note"></span>
+									{:else if accountType(l.accountId) === "EXPENSE"}
+										<span class="share-note" title="The account's own tax category is not on Schedule C, so its share goes on line 25 (Utilities)">
+											line 25
+										</span>
+									{:else}
+										<span class="share-note" title="Only expense accounts without a Schedule C category go on line 25; give the account a Schedule C category to report it">
+											not reported
+										</span>
 									{/if}
-									<form method="POST" action="?/detachAccount" use:enhance>
-										<input type="hidden" name="businessId" value={b.id} />
-										<input type="hidden" name="accountId" value={l.accountId} />
-										<button type="submit" class="link-button">detach</button>
-									</form>
+									<button
+										type="button"
+										class="icon-button"
+										aria-label="Detach {accountPath(l.accountId)} from {b.name}"
+										title="Detach"
+										onclick={() => (detaching = { businessId: b.id, accountId: l.accountId })}
+									>
+										<X size={14} />
+									</button>
 								</li>
 							{/each}
 						</ul>
@@ -684,6 +697,27 @@
 	{/if}
 </Modal>
 
+<!-- Detach confirmation -->
+<Modal open={detaching !== null} title="Detach account" onclose={() => (detaching = null)}>
+	{#if detaching}
+		{@const d = detaching}
+		<form method="POST" action="?/detachAccount" use:enhance={closeDetach} class="detach-confirm">
+			<input type="hidden" name="businessId" value={d.businessId} />
+			<input type="hidden" name="accountId" value={d.accountId} />
+			<p>
+				Detach <strong>{accountPath(d.accountId)}</strong> from <strong>{businessName(d.businessId)}</strong>?
+			</p>
+			<p class="hint">
+				The account and its transactions stay; {businessName(d.businessId)} just stops claiming its {linkPercent(d.businessId, d.accountId)}% on the tax report.
+			</p>
+			<div class="detach-actions">
+				<Button variant="secondary" size="sm" onclick={() => (detaching = null)}>Cancel</Button>
+				<Button variant="danger" size="sm" type="submit">Detach</Button>
+			</div>
+		</form>
+	{/if}
+</Modal>
+
 <style>
 	.tax-prep-page {
 		max-width: 900px;
@@ -836,10 +870,55 @@
 		color: var(--color-primary);
 	}
 
+	/* Attached accounts: one column each for name, percentage, note and detach */
+	.share-list {
+		display: grid;
+		grid-template-columns: 1fr max-content max-content max-content;
+		align-items: center;
+		column-gap: var(--spacing-md);
+	}
+
+	.share-list li {
+		display: contents;
+	}
+
 	.share-note,
 	.share-unit {
 		font-size: 12px;
 		color: var(--color-text-muted);
+	}
+
+	.icon-button {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 4px;
+		background: none;
+		border: none;
+		border-radius: var(--radius-sm);
+		color: var(--color-text-muted);
+		cursor: pointer;
+	}
+
+	.icon-button:hover {
+		background: var(--color-bg-alt);
+		color: var(--color-danger);
+	}
+
+	.detach-confirm {
+		display: flex;
+		flex-direction: column;
+		gap: var(--spacing-md);
+	}
+
+	.detach-confirm p {
+		margin: 0;
+	}
+
+	.detach-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: var(--spacing-sm);
 	}
 
 	.share-form {
@@ -863,19 +942,6 @@
 
 	.add-share select {
 		font-size: 13px;
-	}
-
-	.link-button {
-		background: none;
-		border: none;
-		padding: 0;
-		font-size: 12px;
-		color: var(--color-text-muted);
-		cursor: pointer;
-	}
-
-	.link-button:hover {
-		color: var(--color-danger);
 	}
 
 	.unassigned {
