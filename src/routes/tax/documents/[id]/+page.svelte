@@ -16,7 +16,6 @@
 	const lineFor = (box: string) => doc.lines.find((l) => l.box.toLowerCase() === box.toLowerCase());
 	const extraLines = $derived(doc.lines.filter((l) => !presetBoxes.some((b) => b.box.toLowerCase() === l.box.toLowerCase())));
 	const fileUrl = $derived(doc.file ? `/tax/documents/${doc.id}/file?v=${doc.file.id}` : null);
-	const total = $derived(doc.lines.reduce((sum, l) => sum + l.amount, 0));
 
 	// Every row the sidebar shows: preset boxes first, then any others on the document
 	const rows = $derived([
@@ -215,10 +214,6 @@
 	// ---- File attach / replace ----
 
 	let attachForm = $state<HTMLFormElement | undefined>();
-
-	function formatCurrency(value: number): string {
-		return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
-	}
 
 	function formatSize(bytes: number): string {
 		if (bytes < 1024) return `${bytes} B`;
@@ -423,11 +418,6 @@
 						onkeydown={(e) => e.key === "Enter" && addExtra()} />
 					<Button size="sm" variant="secondary" onclick={addExtra} disabled={!newBox.trim() || !newAmount.trim()}>Add</Button>
 				</div>
-			</div>
-
-			<div class="total-row">
-				<span>Total</span>
-				<strong class="mono">{formatCurrency(total)}</strong>
 			</div>
 		</aside>
 	</div>
@@ -739,14 +729,6 @@
 		font-size: 13px;
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-sm);
-	}
-
-	.total-row {
-		display: flex;
-		justify-content: space-between;
-		margin-top: auto;
-		padding-top: var(--spacing-sm);
-		border-top: 1px solid var(--color-border);
 	}
 
 	.pick-form {

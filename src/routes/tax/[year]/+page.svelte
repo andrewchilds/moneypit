@@ -117,9 +117,6 @@
 		return String(q.answer);
 	}
 
-	const documentTotal = (doc: PageData["status"]["documents"][number]) =>
-		doc.lines.reduce((sum, l) => sum + l.amount, 0);
-
 	const reconciliationsOf = (documentId: string) => data.status.reconciliations.filter((r) => r.documentId === documentId);
 	const reconciliationLabel = { matched: "Matched", variance: "Variance", no_transactions: "No transactions" } as const;
 </script>
@@ -555,12 +552,6 @@
 									</td>
 								</tr>
 							{/each}
-							<tr class="total-row">
-								<td></td>
-								<td colspan="2"><strong>Total</strong></td>
-								<td class="amount"><strong>{formatCurrency(documentTotal(doc))}</strong></td>
-								<td></td>
-							</tr>
 						</tbody>
 					</table>
 				{/if}
@@ -1081,10 +1072,6 @@
 
 	.lines {
 		margin-top: var(--spacing-sm);
-	}
-
-	.total-row {
-		background: var(--color-bg-alt);
 	}
 
 	.file-hint {
