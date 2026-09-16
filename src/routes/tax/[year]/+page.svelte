@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from "$app/forms";
 	import { goto } from "$app/navigation";
-	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, ChevronRight, Briefcase, FileUp, FileText, Crosshair } from "lucide-svelte";
+	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, ChevronRight, Briefcase, FileUp, FileText, Crosshair, CircleCheck, CircleAlert, CircleDashed } from "lucide-svelte";
 	import { sniffFileText } from "$lib/pdf/client";
 	import { detectFormType } from "$lib/documentFigures";
 	import StatCard from "$lib/components/StatCard.svelte";
@@ -117,8 +117,13 @@
 		return String(q.answer);
 	}
 
-	const reconciliationsOf = (documentId: string) => data.status.reconciliations.filter((r) => r.documentId === documentId);
+	// Each mapped box of a document tied to an account is compared with the books.
+	// The amount shows an icon for the outcome; clicking it opens the comparison.
+	type Reconciliation = PageData["status"]["reconciliations"][number];
+	const reconciliationOf = (lineId: string) => data.status.reconciliations.find((r) => r.lineId === lineId);
 	const reconciliationLabel = { matched: "Matched", variance: "Variance", no_transactions: "No transactions" } as const;
+	const reconciliationIcon = { matched: CircleCheck, variance: CircleAlert, no_transactions: CircleDashed } as const;
+	let shownReconciliation = $state<Reconciliation | null>(null);
 </script>
 
 <div class="tax-prep-page">
@@ -505,22 +510,6 @@
 					</div>
 				</header>
 
-				{#if reconciliationsOf(doc.id).length > 0}
-					<ul class="reconciliation">
-						{#each reconciliationsOf(doc.id) as r (r.lineId)}
-							<li class="reconcile-line status-{r.status}">
-								<span class="reconcile-what">Box {r.box} · {r.taxCategoryName} · {r.accountPath}</span>
-								<span class="reconcile-figures">
-									books <strong class="mono">{formatCurrency(r.bookAmount)}</strong>
-									· document <strong class="mono">{formatCurrency(r.documentAmount)}</strong>
-									· difference <strong class="mono">{formatCurrency(r.difference)}</strong>
-								</span>
-								<span class="status status-{r.status}">{reconciliationLabel[r.status]}</span>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-
 				{#if doc.lines.length > 0}
 					<table class="table lines">
 						<thead>
@@ -534,6 +523,7 @@
 						</thead>
 						<tbody>
 							{#each doc.lines as line (line.id)}
+								{@const r = reconciliationOf(line.id)}
 								<tr>
 									<td class="mono">{line.box}</td>
 									<td>
@@ -543,7 +533,22 @@
 										{/if}
 									</td>
 									<td class:muted={!line.taxCategory}>{line.taxCategory?.name ?? "not mapped"}</td>
-									<td class="amount">{formatCurrency(line.amount)}</td>
+									<td class="amount">
+										{#if r}
+											{@const Icon = reconciliationIcon[r.status]}
+											<button
+												type="button"
+												class="reconciled status-{r.status}"
+												title="{reconciliationLabel[r.status]}: books {formatCurrency(r.bookAmount)}"
+												onclick={() => (shownReconciliation = r)}
+											>
+												{formatCurrency(line.amount)}
+												<Icon size={14} />
+											</button>
+										{:else}
+											<span class="reconciled">{formatCurrency(line.amount)}<span class="icon-slot"></span></span>
+										{/if}
+									</td>
 									<td class="actions">
 										<form method="POST" action="?/deleteLine" use:enhance>
 											<input type="hidden" name="id" value={line.id} />
@@ -643,6 +648,40 @@
 			<Button variant="primary" type="submit">{newFile ? "Add and open" : "Add"}</Button>
 		</div>
 	</form>
+</Modal>
+
+<Modal open={shownReconciliation !== null} title="Books vs. document" onclose={() => (shownReconciliation = null)}>
+	{#if shownReconciliation}
+		{@const r = shownReconciliation}
+		{@const Icon = reconciliationIcon[r.status]}
+		<div class="reconcile-detail">
+			<p class="reconcile-status status-{r.status}"><Icon size={16} /> {reconciliationLabel[r.status]}</p>
+			<dl class="reconcile-figures">
+				<dt>Box {r.box}</dt>
+				<dd>{r.label}</dd>
+				<dt>Tax category</dt>
+				<dd>{r.taxCategoryName}</dd>
+				<dt>Account</dt>
+				<dd>{r.accountPath}</dd>
+				<dt>Books</dt>
+				<dd class="mono">{formatCurrency(r.bookAmount)}</dd>
+				<dt>Document</dt>
+				<dd class="mono">{formatCurrency(r.documentAmount)}</dd>
+				<dt>Difference</dt>
+				<dd class="mono">{formatCurrency(r.difference)}</dd>
+			</dl>
+			<p class="hint">
+				{#if r.status === "no_transactions"}
+					No {year} transactions of {r.accountPath} are categorized as {r.taxCategoryName}. The document figure is used on its own.
+				{:else if r.status === "variance"}
+					The document replaces the book figure on the tax report. Compare the {year} transactions of {r.accountPath} in {r.taxCategoryName} with the form to find what is missing or miscategorized.
+				{:else}
+					The {year} transactions of {r.accountPath} in {r.taxCategoryName} add up to the document figure.
+				{/if}
+			</p>
+			<a class="report-link" href="/reports/tax?year={year}">Tax Report <ChevronRight size={16} /></a>
+		</div>
+	{/if}
 </Modal>
 
 <style>
@@ -994,47 +1033,79 @@
 		color: var(--color-text);
 	}
 
-	.reconciliation {
-		list-style: none;
-		margin: var(--spacing-sm) 0 0;
-		padding: 0;
+	/* An amount compared with the books: the figure plus an icon for the outcome */
+	.reconciled {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 6px;
+		margin: -2px -6px;
+		border: none;
+		border-radius: var(--radius-sm);
+		background: transparent;
+		font: inherit;
+		color: inherit;
+	}
+
+	button.reconciled {
+		cursor: pointer;
+	}
+
+	button.reconciled:hover {
+		background: var(--color-bg-alt);
+	}
+
+	/* Keeps an amount with no comparison in the same column as the others */
+	.icon-slot {
+		width: 14px;
+	}
+
+	.reconciled.status-matched :global(svg) {
+		color: var(--color-success);
+	}
+
+	.reconciled.status-variance :global(svg) {
+		color: var(--color-danger);
+	}
+
+	.reconciled.status-no_transactions :global(svg) {
+		color: var(--color-text-muted);
+	}
+
+	.reconcile-detail {
 		display: flex;
 		flex-direction: column;
-		gap: 4px;
+		gap: var(--spacing-md);
+	}
+
+	.reconcile-status {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		align-self: flex-start;
+		margin: 0;
+		padding: 4px 10px;
+		border-radius: var(--radius-sm);
 		font-size: 13px;
 	}
 
-	.reconcile-line {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--spacing-sm);
-		padding: 4px var(--spacing-sm);
-		border-radius: var(--radius-sm);
-		background: var(--color-bg-alt);
-	}
-
-	.reconcile-line.status-variance {
-		background: var(--color-danger-light);
-		color: var(--color-text);
-	}
-
-	.reconcile-line.status-no_transactions {
-		background: var(--color-warning-light);
-	}
-
-	.reconcile-line.status-matched {
-		background: var(--color-bg-alt);
-		color: var(--color-text);
-	}
-
-	.reconcile-what {
-		flex: 1;
-		min-width: 200px;
-	}
-
 	.reconcile-figures {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: var(--spacing-xs) var(--spacing-md);
+		margin: 0;
+	}
+
+	.reconcile-figures dt {
 		color: var(--color-text-muted);
+	}
+
+	.reconcile-figures dd {
+		margin: 0;
+	}
+
+	.reconcile-detail .hint {
+		margin: 0;
 	}
 
 	.document {
