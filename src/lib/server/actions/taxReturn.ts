@@ -236,7 +236,11 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 			ordinaryIncludesQualified: ordinaryDividends?.documentTotal !== null && ordinaryDividends?.documentTotal !== undefined
 		},
 		retirement,
-		capitalGains: { shortTerm: reported(categoryOn(scheduleD, '1')), longTerm: reported(categoryOn(scheduleD, '8')) },
+		capitalGains: {
+			shortTerm: reported(categoryOn(scheduleD, '1')),
+			longTerm: reported(categoryOn(scheduleD, '8')),
+			distributions: reported(categoryOn(scheduleD, '13'))
+		},
 		unemployment,
 		stateRefund,
 		scheduleENet: scheduleE?.reportedNet ?? 0,

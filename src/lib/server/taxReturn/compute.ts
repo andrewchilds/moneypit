@@ -93,7 +93,8 @@ export interface ReturnInput {
 		ordinaryIncludesQualified: boolean;
 	};
 	retirement: { gross: number; taxable: number };
-	capitalGains: { shortTerm: number; longTerm: number };
+	/** Net gains from sales, and capital gain distributions from funds (1099-DIV box 2a), which are long-term by law and go on Schedule D line 13 */
+	capitalGains: { shortTerm: number; longTerm: number; distributions: number };
 	unemployment: number;
 	stateRefund: number;
 	scheduleENet: number;
@@ -540,15 +541,16 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	let netLongTermGain = 0;
 	let netCapital = 0;
 	let scheduleD: FormBuilder | null = null;
-	const { shortTerm, longTerm } = input.capitalGains;
-	if (shortTerm !== 0 || longTerm !== 0) {
+	const { shortTerm, longTerm, distributions } = input.capitalGains;
+	if (shortTerm !== 0 || longTerm !== 0 || distributions !== 0) {
 		scheduleD = new FormBuilder('f1040sd', 'Schedule D', 'Capital Gains and Losses');
 		scheduleD.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
 		scheduleD.text('ssn', 'Your social security number', id.ssn);
 		scheduleD.amount('1a', 'Short-term totals from Form 1099-B (gain or loss)', shortTerm, 'input');
 		const d7 = scheduleD.amount('7', 'Net short-term capital gain or loss', shortTerm, 'total');
 		scheduleD.amount('8a', 'Long-term totals from Form 1099-B (gain or loss)', longTerm, 'input');
-		const d15 = scheduleD.amount('15', 'Net long-term capital gain or loss', longTerm, 'total');
+		const d13 = scheduleD.amount('13', 'Capital gain distributions', distributions, 'input', 'Box 2a of the 1099-DIVs; always long-term');
+		const d15 = scheduleD.amount('15', 'Net long-term capital gain or loss', longTerm + d13, 'total', 'Lines 8a through 14');
 		const d16 = scheduleD.amount('16', 'Combine lines 7 and 15', d7 + d15, 'total');
 		netCapital = d16;
 		const limit = constants.capitalLossLimit[status];

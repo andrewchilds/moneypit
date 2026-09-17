@@ -1,6 +1,7 @@
 import { db } from '../db';
 import { getModule, getAllModules } from '../taxModules';
 import type { TaxModule } from '../taxModules';
+import type { Prisma } from '@prisma/client';
 
 export interface EnabledModule {
 	moduleId: string;
@@ -66,8 +67,40 @@ export async function getEnabledModules(bookId: string): Promise<EnabledModule[]
 }
 
 /**
+ * Create the module's categories a book doesn't have yet. Runs when a module
+ * is enabled, and again on an enabled module to pick up categories added to
+ * it since (module:enable is safe to repeat).
+ */
+async function seedCategories(tx: Prisma.TransactionClient, bookId: string, module: TaxModule): Promise<number> {
+	const existingCategories = await tx.taxCategory.findMany({
+		where: { bookId },
+		select: { name: true, scheduleRef: true }
+	});
+	const existingSet = new Set(existingCategories.map((c) => `${c.name}|${c.scheduleRef ?? ''}`));
+
+	let categoriesCreated = 0;
+	for (const cat of module.categories) {
+		const key = `${cat.name}|${cat.scheduleRef}`;
+		if (!existingSet.has(key)) {
+			await tx.taxCategory.create({
+				data: {
+					bookId,
+					name: cat.name,
+					scheduleRef: cat.scheduleRef,
+					description: cat.description,
+					moduleId: module.id
+				}
+			});
+			categoriesCreated++;
+		}
+	}
+	return categoriesCreated;
+}
+
+/**
  * Enable a module for a book. Creates the BookTaxModule record and seeds
- * any categories that don't already exist.
+ * any categories that don't already exist. On a module that is already
+ * enabled it only seeds the categories the book is missing.
  */
 export async function enableModule(bookId: string, moduleId: string): Promise<EnableModuleResult> {
 	const module = getModule(moduleId);
@@ -75,50 +108,16 @@ export async function enableModule(bookId: string, moduleId: string): Promise<En
 		throw new Error(`Unknown module: ${moduleId}`);
 	}
 
-	// Check if already enabled
 	const existing = await db.bookTaxModule.findUnique({
 		where: { bookId_moduleId: { bookId, moduleId } }
 	});
 
-	if (existing) {
-		return { success: true, categoriesCreated: 0 };
-	}
-
-	// Create the BookTaxModule record and seed categories in a transaction
 	let categoriesCreated = 0;
-
 	await db.$transaction(async (tx) => {
-		// Enable the module
-		await tx.bookTaxModule.create({
-			data: { bookId, moduleId }
-		});
-
-		// Get existing categories in this book to avoid duplicates
-		const existingCategories = await tx.taxCategory.findMany({
-			where: { bookId },
-			select: { name: true, scheduleRef: true }
-		});
-
-		const existingSet = new Set(
-			existingCategories.map((c) => `${c.name}|${c.scheduleRef ?? ''}`)
-		);
-
-		// Create categories from the module that don't already exist
-		for (const cat of module.categories) {
-			const key = `${cat.name}|${cat.scheduleRef}`;
-			if (!existingSet.has(key)) {
-				await tx.taxCategory.create({
-					data: {
-						bookId,
-						name: cat.name,
-						scheduleRef: cat.scheduleRef,
-						description: cat.description,
-						moduleId
-					}
-				});
-				categoriesCreated++;
-			}
+		if (!existing) {
+			await tx.bookTaxModule.create({ data: { bookId, moduleId } });
 		}
+		categoriesCreated = await seedCategories(tx, bookId, module);
 	});
 
 	return { success: true, categoriesCreated };

@@ -54,7 +54,7 @@ function input(overrides: Partial<ReturnInput> = {}): ReturnInput {
 		interest: { taxable: [], taxExempt: 0 },
 		dividends: { ordinary: [], qualified: 0, ordinaryIncludesQualified: false },
 		retirement: { gross: 0, taxable: 0 },
-		capitalGains: { shortTerm: 0, longTerm: 0 },
+		capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0 },
 		unemployment: 0,
 		stateRefund: 0,
 		scheduleENet: 0,
@@ -262,7 +262,7 @@ describe('computeReturn', () => {
 				wages: 50000,
 				interest: { taxable: [{ name: 'Ally', amount: 400 }, { name: 'Marcus', amount: 250.5 }], taxExempt: 100 },
 				dividends: { ordinary: [{ name: 'Vanguard', amount: 2000 }], qualified: 1500, ordinaryIncludesQualified: true },
-				capitalGains: { shortTerm: -5000, longTerm: 500 }
+				capitalGains: { shortTerm: -5000, longTerm: 500, distributions: 0 }
 			}),
 			c2025
 		);
@@ -282,11 +282,21 @@ describe('computeReturn', () => {
 	});
 
 	it('carries the whole capital loss forward when income is already below zero', () => {
-		const r = computeReturn(input({ wages: 5000, capitalGains: { shortTerm: -8000, longTerm: 0 } }), c2025);
+		const r = computeReturn(input({ wages: 5000, capitalGains: { shortTerm: -8000, longTerm: 0, distributions: 0 } }), c2025);
 		expect(line(r, 'f1040', '7')).toBe(-3000);
 		expect(r.summary.taxableIncome).toBe(0);
 		// Taxable income before the loss is 5,000 − 15,750 = −10,750, so none of the 3,000 is used
 		expect(r.warnings.some((w) => w.includes('0.00 is used this year') && w.includes('8,000.00 carries forward'))).toBe(true);
+	});
+
+	it('puts capital gain distributions on Schedule D line 13 as long-term gain', () => {
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: -200, longTerm: 0, distributions: 750.25 } }), c2025);
+		expect(line(r, 'f1040sd', '13')).toBe(750.25);
+		expect(line(r, 'f1040sd', '15')).toBe(750.25);
+		expect(line(r, 'f1040sd', '16')).toBe(550.25);
+		expect(line(r, 'f1040', '7')).toBe(550.25);
+		// the net gain is long-term, so it is taxed at the preferential rate
+		expect(r.summary.taxableIncome).toBe(60000 + 550.25 - c2025.standardDeduction.single);
 	});
 
 	it('adds qualified dividends to ordinary when the books split them', () => {
@@ -492,7 +502,7 @@ describe('self-employment deductions', () => {
 	});
 
 	it('does not let a negative AGI inflate the medical deduction', () => {
-		const r = computeReturn(input({ capitalGains: { shortTerm: -3000, longTerm: 0 }, itemized: { ...input().itemized, medical: 4000 } }), c2025);
+		const r = computeReturn(input({ capitalGains: { shortTerm: -3000, longTerm: 0, distributions: 0 }, itemized: { ...input().itemized, medical: 4000 } }), c2025);
 		expect(r.summary.adjustedGrossIncome).toBe(-3000);
 		expect(r.forms.find((f) => f.id === 'f1040')?.lines.find((l) => l.line === '12e')?.detail).toContain('itemizing would give 4,000.00');
 	});

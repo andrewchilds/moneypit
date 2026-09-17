@@ -166,7 +166,7 @@ TAX CATEGORIES
 TAX MODULES
   module:list             List all available tax modules
   module:enabled          List enabled modules for current book
-  module:enable <id>      Enable a module (seeds its categories)
+  module:enable <id>      Enable a module (seeds its categories; on an enabled module, seeds the ones the book is missing)
   module:disable <id>     Disable a module (deletes unused categories)
 
 BUSINESSES (one Schedule C each; answers and documents belong to one, accounts are attached at a percentage)

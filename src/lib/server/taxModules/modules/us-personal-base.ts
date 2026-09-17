@@ -71,6 +71,7 @@ export const usPersonalBase: TaxModule = {
 		// Schedule D - Capital Gains
 		{ name: 'Capital Gains - Short Term', scheduleRef: 'Schedule D Line 1', description: 'Short-term capital gains (held < 1 year)' },
 		{ name: 'Capital Gains - Long Term', scheduleRef: 'Schedule D Line 8', description: 'Long-term capital gains (held >= 1 year)' },
+		{ name: 'Capital Gain Distributions', scheduleRef: 'Schedule D Line 13', description: 'Capital gain distributions from mutual funds and ETFs (1099-DIV box 2a)' },
 		// Non-deductible
 		{ name: 'Not Deductible', scheduleRef: 'N/A', description: 'Personal expenses - not tax deductible' },
 		{ name: 'Tax Exempt', scheduleRef: 'N/A', description: 'Tax-exempt income (municipal bonds, etc.)' },

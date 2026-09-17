@@ -54,7 +54,7 @@ export const FORM_PRESETS: Record<string, FormPreset> = {
 		boxes: [
 			{ box: '1a', label: 'Total ordinary dividends', categoryHints: ['dividend.*ordinary', '^dividend income$', 'dividend'] },
 			{ box: '1b', label: 'Qualified dividends', categoryHints: ['dividend.*qualified'] },
-			{ box: '2a', label: 'Total capital gain distributions', categoryHints: ['capital gains? - long term', '^capital gains$'] },
+			{ box: '2a', label: 'Total capital gain distributions', categoryHints: ['capital gain distributions?', 'capital gains? - long term', '^capital gains$'] },
 			{ box: '4', label: 'Federal income tax withheld', categoryHints: ['federal.*withheld'] },
 			{ box: '12', label: 'Exempt-interest dividends', categoryHints: ['tax exempt'] }
 		]
