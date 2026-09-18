@@ -92,7 +92,7 @@
 		await post("deleteLine", { id });
 	}
 
-	function arm(box: string) {
+	function selectBox(box: string) {
 		activeBox = box;
 		const line = lineFor(box);
 		selectedLineId = line?.id ?? null;
@@ -192,7 +192,7 @@
 	}
 
 	// Opened from the tax report on a particular line (?line=<id>): select it,
-	// arm its box, and scroll the file to where the figure was read from.
+	// select its box, and scroll the file to where the figure was read from.
 	const requestedLine = page.url.searchParams.get("line");
 	let scrollPending = !!requestedLine;
 
@@ -390,7 +390,7 @@
 			</div>
 			<p class="muted small">
 				{#if doc.file}
-					Click a box to arm it, then click its figure on the form. Or type amounts directly.
+					Click a box to select it, then click its figure on the form. Or type amounts directly.
 				{:else}
 					Type each box's amount. Enter moves to the next box.
 				{/if}
@@ -400,7 +400,7 @@
 				{#each rows as row (row.box)}
 					{@const line = row.line}
 					<div class="row" class:active={activeBox === row.box} class:filled={!!line}>
-						<button type="button" class="box-code mono" onclick={() => arm(row.box)} title="Arm box {row.box}">
+						<button type="button" class="box-code mono" onclick={() => selectBox(row.box)} title="Select box {row.box}">
 							{row.box}
 						</button>
 						<div class="row-main">
@@ -427,7 +427,7 @@
 							placeholder="—"
 							bind:value={drafts[row.box]}
 							oninput={() => dirty.add(row.box)}
-							onfocus={() => arm(row.box)}
+							onfocus={() => selectBox(row.box)}
 							onblur={() => saveBox(row.box, row.label)}
 							onkeydown={(e) => onRowKeydown(e, row.box, row.label)}
 						/>
