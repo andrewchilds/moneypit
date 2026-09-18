@@ -48,6 +48,8 @@ export interface BusinessInput {
 	description: string;
 	code: string;
 	accountingMethod: 'cash' | 'accrual' | null;
+	/** Annual financing fact; null means unanswered, not all investment at risk. */
+	allInvestmentAtRisk: boolean | null;
 	income: ScheduleLineFigure[];
 	expenses: ScheduleLineFigure[];
 	sepContribution: number;
@@ -458,7 +460,19 @@ function scheduleC(business: BusinessInput, warnings: string[]): FormBuilder {
 	f.amount('28', 'Total expenses before business use of home', line28, 'total');
 	const line29 = f.amount('29', 'Tentative profit or loss', line7 - line28);
 	const line30 = f.amount('30', 'Expenses for business use of home', expensesOn('30').amount, 'input');
-	f.amount('31', 'Net profit or loss', line29 - line30, 'result');
+	const line31 = f.amount('31', 'Net profit or loss', line29 - line30, 'result');
+	if (line31 < 0) {
+		if (business.allInvestmentAtRisk === true) {
+			f.check('32a');
+			f.text('32', 'Investment at risk', 'All investment is at risk');
+		} else if (business.allInvestmentAtRisk === false) {
+			f.check('32b');
+			f.text('32', 'Investment at risk', 'Some investment is not at risk');
+			warnings.push(`${name}: some investment is not at risk. Form 6198 is required and is not computed; the ${money(-line31)} Schedule C loss and downstream tax and credits are provisional until the allowable loss is determined.`);
+		} else {
+			warnings.push(`${name}: answer whether all investment was at risk for ${business.unassigned ? 'this activity' : 'this business and tax year'} (Schedule C line 32). Neither box is checked while the answer is missing.`);
+		}
+	}
 
 	// Part V lists what is behind line 27b, one row per category (nine rows on the form)
 	const other = expensesOn('27b');

@@ -212,6 +212,7 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 				.map((c) => ({ line: lineOf(c.scheduleRef) ?? '', category: c.taxCategoryName, amount: c.reportedTotal }))
 				.filter((f) => f.line !== '' && f.amount !== 0);
 		const method = asText(answers.get('accounting_method'));
+		const allInvestmentAtRisk = answers.get('all_investment_at_risk');
 		// The home office worksheet already deducted last year's carryover and figured this year's
 		const homeOffice = report.worksheets.find((w) => w.worksheetId === 'home-office' && w.businessId === section.businessId);
 		return {
@@ -222,6 +223,7 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 			description: asText(answers.get('business_description')),
 			code: asText(answers.get('business_code')),
 			accountingMethod: method === 'cash' || method === 'accrual' ? method : null,
+			allInvestmentAtRisk: typeof allInvestmentAtRisk === 'boolean' ? allInvestmentAtRisk : null,
 			income: figures(section.incomeCategories),
 			expenses: figures(section.expenseCategories),
 			sepContribution: asNumber(answers.get('sep_contribution')),

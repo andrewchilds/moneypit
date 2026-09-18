@@ -185,6 +185,13 @@ export const usScheduleC: TaxModule = {
 			]
 		},
 		{
+			key: 'all_investment_at_risk',
+			prompt: 'Was all your investment in this business at risk this year? (Schedule C line 32)',
+			type: 'boolean',
+			description:
+				'Usually Yes if you paid with your own money or credit you must repay. Protected investments or special financing may require No and Form 6198.'
+		},
+		{
 			key: 'received_1099_nec',
 			prompt: 'Did any client issue a 1099-NEC for this year?',
 			type: 'boolean'

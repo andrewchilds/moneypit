@@ -348,7 +348,7 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'31': 'f1_46[0]',
 			...scheduleCPartVFields()
 		},
-		checks: { 'method:cash': 'c1_1[0]', 'method:accrual': 'c1_1[1]', 'materially-participated': 'c1_2[0]' }
+		checks: { 'method:cash': 'c1_1[0]', 'method:accrual': 'c1_1[1]', 'materially-participated': 'c1_2[0]', '32a': 'c1_7[0]', '32b': 'c1_7[1]' }
 	},
 	f1040sd: {
 		file: 'f1040sd.pdf',

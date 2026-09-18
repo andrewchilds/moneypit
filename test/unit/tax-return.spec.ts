@@ -25,6 +25,7 @@ function business(overrides: Partial<BusinessInput> = {}): BusinessInput {
 		description: 'Software consulting',
 		code: '541511',
 		accountingMethod: 'cash',
+		allInvestmentAtRisk: null,
 		income: [{ line: '1', category: 'Gross Receipts', amount: 100000 }],
 		expenses: [
 			{ line: '18', category: 'Office Expense', amount: 15000 },
@@ -174,6 +175,36 @@ describe('computeReturn', () => {
 		expect(line(r, 'f1040sc', '27b')).toBe(300);
 		expect(line(r, 'f1040sc', '28')).toBe(800);
 		expect(r.warnings.some((w) => w.includes('meals'))).toBe(true);
+	});
+
+	it('keeps loss financing answers separate for each business and warns about unsupported loss limits', () => {
+		const r = computeReturn(input({ businesses: [
+			business({ id: 'funded', name: 'Self funded', income: [], allInvestmentAtRisk: true }),
+			business({ id: 'protected', name: 'Protected investment', income: [], allInvestmentAtRisk: false }),
+			business({ id: 'unknown', name: 'Unanswered', income: [] })
+		] }), c2025);
+		const forms = r.forms.filter((f) => f.id === 'f1040sc');
+		expect(forms[0].checks).toContain('32a');
+		expect(forms[0].checks).not.toContain('32b');
+		expect(forms[1].checks).toContain('32b');
+		expect(forms[1].checks).not.toContain('32a');
+		expect(forms[2].checks).not.toContain('32a');
+		expect(forms[2].checks).not.toContain('32b');
+		expect(forms[0].lines.find((l) => l.line === '32')?.text).toBe('All investment is at risk');
+		expect(forms[1].lines.find((l) => l.line === '32')?.text).toBe('Some investment is not at risk');
+		expect(r.warnings.some((w) => w.startsWith('Protected investment:') && w.includes('Form 6198') && w.includes('provisional'))).toBe(true);
+		expect(r.warnings.some((w) => w.startsWith('Unanswered:') && w.includes('Schedule C line 32'))).toBe(true);
+		expect(r.warnings.some((w) => w.startsWith('Self funded:') && w.includes('at risk'))).toBe(false);
+		expect(line(r, 'f1040sc', '31', 'funded')).toBe(-20000);
+	});
+
+	it('leaves line 32 unused for profitable businesses regardless of their financing answer', () => {
+		for (const allInvestmentAtRisk of [true, false, null]) {
+			const r = computeReturn(input({ businesses: [business({ allInvestmentAtRisk })] }), c2025);
+			expect(checks(r, 'f1040sc')).not.toContain('32a');
+			expect(checks(r, 'f1040sc')).not.toContain('32b');
+			expect(r.warnings.some((w) => w.includes('at risk'))).toBe(false);
+		}
 	});
 
 	it('keeps the home office off line 28 and on line 30', () => {
