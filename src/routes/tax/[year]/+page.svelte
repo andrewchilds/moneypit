@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { enhance } from "$app/forms";
-	import { goto } from "$app/navigation";
+	import { enhance, deserialize } from "$app/forms";
+	import { goto, invalidateAll } from "$app/navigation";
 	import { page } from "$app/state";
-	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, X, ChevronRight, Briefcase, FileUp, FileText, Crosshair, CircleCheck, CircleAlert, CircleDashed } from "lucide-svelte";
+	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, X, ChevronRight, Briefcase, FileUp, FileText, Crosshair, CircleCheck, CircleAlert, CircleDashed, MoveRight, Link2 } from "lucide-svelte";
 	import { sniffFileText } from "$lib/pdf/client";
 	import { detectFormType } from "$lib/documentFigures";
 	import StatCard from "$lib/components/StatCard.svelte";
@@ -54,6 +54,9 @@
 	let newFileInput = $state<HTMLInputElement | undefined>();
 	// A file already on another document, instead of a fresh upload
 	let newFileId = $state("");
+	// The file the modal was opened from ("Attach form" on a file): the new
+	// form is read from it, so the modal offers no other file
+	let attachTo = $state<DocumentGroup["file"]>(null);
 
 	/** "Ally-1099.pdf · 1099-B, 1099-DIV" for a file picker option */
 	const fileOptionLabel = (file: PageData["files"][number]) =>
@@ -93,6 +96,7 @@
 		newAccountId = first.account?.id ?? "";
 		newBusinessId = first.business?.id ?? "";
 		newFileId = group.file?.id ?? "";
+		attachTo = group.file;
 	}
 
 	function openAddDocument(expected?: Expected) {
@@ -103,6 +107,7 @@
 		newStatus = "RECEIVED";
 		newFile = null;
 		newFileId = "";
+		attachTo = null;
 		if (newFileInput) newFileInput.value = "";
 		showAddDocument = true;
 	}
@@ -123,6 +128,44 @@
 		dt.items.add(file);
 		newFileInput.files = dt.files;
 		void onNewFileChange();
+	}
+
+	// ---- Editing a document in place ----
+
+	// Posts an action without a form, so a badge can turn into a picker and
+	// save on change
+	let actionError = $state<string | null>(null);
+	async function post(action: string, fields: Record<string, string>) {
+		const body = new FormData();
+		for (const [k, v] of Object.entries(fields)) body.append(k, v);
+		actionError = null;
+		const res = await fetch(`?/${action}`, { method: "POST", body, headers: { "x-sveltekit-action": "true" } });
+		const result = deserialize(await res.text());
+		if (result.type === "failure") actionError = (result.data as { error?: string })?.error ?? "Something went wrong";
+		else if (result.type === "error") actionError = result.error?.message ?? "Something went wrong";
+		await invalidateAll();
+	}
+
+	// The line whose tax category picker is open, and the document whose
+	// account picker is open
+	let editingLineId = $state<string | null>(null);
+	let editingAccountDocId = $state<string | null>(null);
+
+	function focusOnMount(node: HTMLElement) {
+		node.focus();
+	}
+
+	type Line = Doc["lines"][number];
+	async function setLineCategory(doc: Doc, line: Line, category: string) {
+		editingLineId = null;
+		if ((line.taxCategory?.id ?? "none") === category) return;
+		await post("addLine", { documentId: doc.id, box: line.box, label: line.label, amount: String(line.amount), category });
+	}
+
+	async function setDocumentAccount(doc: Doc, accountId: string) {
+		editingAccountDocId = null;
+		if ((doc.account?.id ?? "") === accountId) return;
+		await post("setDocumentAccount", { id: doc.id, accountId });
 	}
 
 	// Attach a file to an existing document straight from its card
@@ -230,8 +273,8 @@
 		</StatCard>
 	</StatsGrid>
 
-	{#if form?.error}
-		<div class="error-banner">{form.error}</div>
+	{#if form?.error || actionError}
+		<div class="error-banner">{form?.error ?? actionError}</div>
 	{/if}
 
 	<nav class="tab-bar" aria-label="Tax prep sections">
@@ -563,10 +606,10 @@
 							<div class="file-title">
 								<FileText size={16} />
 								<strong>{group.file.filename}</strong>
-								<span class="muted">· {formatSize(group.file.size)} · {group.forms.length} {group.forms.length === 1 ? "form" : "forms"}</span>
+								<span class="muted">· {formatSize(group.file.size)} · {group.forms.length} {group.forms.length === 1 ? "form" : "forms"} attached</span>
 							</div>
 							<div class="document-actions">
-								<Button variant="ghost" size="sm" onclick={() => openAddForm(group)}><Plus size={14} /> Add form</Button>
+								<Button variant="ghost" size="sm" onclick={() => openAddForm(group)}><Plus size={14} /> Attach form</Button>
 							</div>
 						</header>
 						<div class="forms">
@@ -591,8 +634,32 @@
 					<div>
 						<span class="mono form-type">{doc.formType}</span>
 						<strong>{doc.issuer}</strong>
-						{#if doc.account}
-							<span class="muted">· {doc.account.path}</span>
+						{#if editingAccountDocId === doc.id}
+							<select
+								class="inline-select"
+								value={doc.account?.id ?? ""}
+								use:focusOnMount
+								onchange={(e) => setDocumentAccount(doc, (e.currentTarget as HTMLSelectElement).value)}
+								onblur={() => (editingAccountDocId = null)}
+							>
+								<option value="">No account</option>
+								{#each data.accounts as a (a.id)}
+									<option value={a.id}>{a.path}</option>
+								{/each}
+							</select>
+						{:else}
+							<button
+								type="button"
+								class="chip"
+								class:unset={!doc.account}
+								title={doc.account
+									? "Tied to this account: the document replaces the book total from it. Click to change."
+									: "Tied to no account: the document replaces the whole category. Click to tie it to one."}
+								onclick={() => (editingAccountDocId = doc.id)}
+							>
+								<Link2 size={12} />
+								{doc.account?.path ?? "no account"}
+							</button>
 						{/if}
 						{#if doc.business}
 							<span class="business-tag"><Briefcase size={12} /> {doc.business.name}</span>
@@ -655,7 +722,42 @@
 											<span class="pin" title="Read from page {line.page} of {doc.file?.filename ?? 'the file'}"><Crosshair size={11} /></span>
 										{/if}
 									</td>
-									<td class:muted={!line.taxCategory}>{line.taxCategory?.name ?? "not mapped"}</td>
+									<td class="category-cell">
+										<span class="mapping">
+										<MoveRight size={14} class="arrow" />
+										{#if editingLineId === line.id}
+											<select
+												class="inline-select"
+												value={line.taxCategory?.id ?? "none"}
+												use:focusOnMount
+												onchange={(e) => setLineCategory(doc, line, (e.currentTarget as HTMLSelectElement).value)}
+												onblur={() => (editingLineId = null)}
+											>
+												<option value="none">Not mapped</option>
+												{#each data.taxCategories as c (c.id)}
+													<option value={c.id}>{c.name}{c.scheduleRef ? ` (${c.scheduleRef})` : ""}</option>
+												{/each}
+											</select>
+										{:else}
+											<button
+												type="button"
+												class="chip"
+												class:unset={!line.taxCategory}
+												title={line.taxCategory ? "Where this box lands on the return. Click to change." : "This box lands nowhere on the return. Click to map it."}
+												onclick={() => (editingLineId = line.id)}
+											>
+												{#if line.taxCategory}
+													<span class="chip-name">{line.taxCategory.name}</span>
+													{#if line.taxCategory.scheduleRef}
+														<span class="chip-ref">{line.taxCategory.scheduleRef}</span>
+													{/if}
+												{:else}
+													not mapped
+												{/if}
+											</button>
+										{/if}
+										</span>
+									</td>
 									<td class="amount">
 										{#if r}
 											{@const Icon = reconciliationIcon[r.status]}
@@ -686,7 +788,7 @@
 			</section>
 {/snippet}
 
-<Modal bind:open={showAddDocument} title="Add document" onclose={() => (showAddDocument = false)}>
+<Modal bind:open={showAddDocument} title={attachTo ? "Attach form" : "Add document"} onclose={() => (showAddDocument = false)}>
 	<form
 		method="POST"
 		action="?/addDocument"
@@ -705,6 +807,16 @@
 				await update();
 			}}
 	>
+		{#if attachTo}
+			<input type="hidden" name="fileId" value={attachTo.id} />
+			<div class="attach-to">
+				<FileText size={16} />
+				<div>
+					<strong>{attachTo.filename}</strong>
+					<span class="hint">Another form read from this file, as with a consolidated statement that holds several.</span>
+				</div>
+			</div>
+		{:else}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="drop-area" class:has-file={!!newFile} ondragover={(e) => e.preventDefault()} ondrop={onModalDrop}>
 			<label class="drop-label">
@@ -730,6 +842,7 @@
 				</select>
 				<span class="hint">A consolidated statement can hold several forms; this one is read from the same file.</span>
 			</div>
+		{/if}
 		{/if}
 		<div class="form-group">
 			<label for="new-form-type">Form type</label>
@@ -777,7 +890,7 @@
 		</div>
 		<div class="form-actions">
 			<Button variant="secondary" onclick={() => (showAddDocument = false)}>Cancel</Button>
-			<Button variant="primary" type="submit">{newFile ? "Add and open" : "Add"}</Button>
+			<Button variant="primary" type="submit">{attachTo ? "Attach and open" : newFile ? "Add and open" : "Add"}</Button>
 		</div>
 	</form>
 </Modal>
@@ -796,9 +909,9 @@
 				<dt>Account</dt>
 				<dd>{r.accountPath}</dd>
 				<dt>Books</dt>
-				<dd class="mono">{formatCurrency(r.bookAmount)}</dd>
+				<dd class="mono replaced" title="The document figure takes precedence on the tax report">{formatCurrency(r.bookAmount)}</dd>
 				<dt>Document</dt>
-				<dd class="mono">{formatCurrency(r.documentAmount)}</dd>
+				<dd class="mono"><strong>{formatCurrency(r.documentAmount)}</strong></dd>
 				<dt>Difference</dt>
 				<dd class="mono">{formatCurrency(r.difference)}</dd>
 			</dl>
@@ -1335,6 +1448,12 @@
 		margin: 0;
 	}
 
+	/* The book figure the document replaces on the report */
+	.reconcile-figures .replaced {
+		text-decoration: line-through;
+		color: var(--color-text-muted);
+	}
+
 	.reconcile-detail .hint {
 		margin: 0;
 	}
@@ -1370,6 +1489,85 @@
 
 	.file-title strong {
 		color: var(--color-text);
+	}
+
+	.file-title .muted {
+		margin: 0;
+	}
+
+	/* A value that can be changed in place: the account a form is tied to,
+	   the category a box lands on */
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 8px;
+		border: none;
+		border-radius: var(--radius-sm);
+		background: var(--color-primary-light, var(--color-bg-alt));
+		color: var(--color-primary);
+		font: inherit;
+		font-size: 12px;
+		font-weight: 500;
+		line-height: 1.4;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.chip:hover {
+		filter: brightness(0.95);
+	}
+
+	.chip.unset {
+		background: transparent;
+		border: 1px dashed var(--color-border);
+		color: var(--color-text-muted);
+		font-weight: 400;
+	}
+
+	.chip.unset:hover {
+		background: var(--color-bg-hover);
+		filter: none;
+	}
+
+	/* A category chip stacks the name over its schedule line */
+	.mapping .chip {
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0;
+	}
+
+	.chip-ref {
+		font-size: 11px;
+		font-weight: 400;
+		opacity: 0.75;
+	}
+
+	.document-header .chip {
+		margin-left: var(--spacing-xs);
+		vertical-align: middle;
+	}
+
+	.inline-select {
+		max-width: 100%;
+		font-size: 12px;
+		padding: 2px 4px;
+	}
+
+	/* The arrow from a box to where it lands, kept on one line with the chip */
+	.mapping {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.mapping :global(.arrow) {
+		flex: none;
+		color: var(--color-text-muted);
+	}
+
+	.mapping .chip {
+		white-space: nowrap;
 	}
 
 	.forms {
@@ -1442,6 +1640,27 @@
 		vertical-align: middle;
 		margin-left: 4px;
 		color: var(--color-success);
+	}
+
+	.attach-to {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--spacing-sm);
+		margin-bottom: var(--spacing-sm);
+		padding: var(--spacing-sm) var(--spacing-md);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg-alt);
+	}
+
+	.attach-to :global(svg) {
+		flex: none;
+		margin-top: 2px;
+		color: var(--color-text-muted);
+	}
+
+	.attach-to .hint {
+		display: block;
 	}
 
 	.drop-area {

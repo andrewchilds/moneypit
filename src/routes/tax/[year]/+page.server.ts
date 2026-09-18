@@ -227,6 +227,21 @@ export const actions: Actions = {
 		}
 	},
 
+	// The account a document is tied to decides how much of the book total it
+	// replaces; '' detaches it so the document replaces the whole category
+	setDocumentAccount: async ({ request }) => {
+		const data = await request.formData();
+		const id = data.get('id') as string;
+		const accountId = ((data.get('accountId') as string) ?? '').trim() || null;
+		if (!id) return fail(400, { error: 'Document is required' });
+		try {
+			await updateTaxDocument(id, { accountId });
+			return { success: true };
+		} catch (e) {
+			return fail(400, { error: (e as Error).message });
+		}
+	},
+
 	deleteDocument: async ({ request }) => {
 		const data = await request.formData();
 		const id = data.get('id') as string;
