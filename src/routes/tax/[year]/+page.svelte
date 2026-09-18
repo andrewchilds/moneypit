@@ -254,10 +254,7 @@
 
 	<!-- Businesses -->
 	{#if activeTab === "businesses"}
-		<section class="section">
-			<div class="section-header">
-				<h2>Businesses</h2>
-			</div>
+		<div class="businesses">
 			<p class="muted">
 				Each business files its own Schedule C. An account is attached to a business at the percentage the business
 				claims: its own accounts at 100%, a personal account it uses partly (phone, internet) at less, and an account
@@ -407,7 +404,7 @@
 				<input name="name" bind:value={newBusinessName} placeholder="Business name" required />
 				<Button variant="primary" size="sm" type="submit"><Plus size={16} /> Add business</Button>
 			</form>
-		</section>
+		</div>
 	{/if}
 
 	<!-- Questions -->
@@ -991,11 +988,13 @@
 		color: var(--color-primary);
 	}
 
+	/* Each business is a card of its own on the Businesses tab */
 	.business {
 		margin-top: var(--spacing-md);
-		padding: var(--spacing-md);
+		padding: var(--spacing-lg);
+		background: var(--color-bg);
 		border: 1px solid var(--color-border-light);
-		border-radius: var(--radius-md);
+		border-radius: var(--radius-lg);
 	}
 
 	.business-header {
