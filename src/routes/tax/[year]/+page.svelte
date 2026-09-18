@@ -34,9 +34,42 @@
 	/** "Ally-1099.pdf · 1099-B, 1099-DIV" for a file picker option */
 	const fileOptionLabel = (file: PageData["files"][number]) =>
 		`${file.filename} · ${file.documents.map((d) => `${d.formType} ${d.issuer}`).join(", ")}`;
-	/** The other documents read from the same file as this one */
-	const sharedWith = (doc: PageData["status"]["documents"][number]) =>
-		doc.file?.documents.filter((d) => d.id !== doc.id) ?? [];
+	type Doc = PageData["status"]["documents"][number];
+	interface DocumentGroup {
+		key: string;
+		file: Doc["file"];
+		forms: Doc[];
+	}
+
+	// Documents on hand, grouped by the file they were read from: the file is
+	// the outer entry and the forms in it sit inside (a consolidated 1099
+	// holds a 1099-DIV and a 1099-B); a form with no file stands on its own.
+	const documentGroups = $derived.by(() => {
+		const groups = new Map<string, DocumentGroup>();
+		for (const doc of data.status.documents) {
+			const key = doc.file ? `file:${doc.file.id}` : `form:${doc.id}`;
+			const group = groups.get(key) ?? { key, file: doc.file, forms: [] };
+			group.forms.push(doc);
+			groups.set(key, group);
+		}
+		return [...groups.values()];
+	});
+
+	function formatSize(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+		return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	}
+
+	/** Another form read from a file already on hand: same issuer, account and business as its first form */
+	function openAddForm(group: DocumentGroup) {
+		const first = group.forms[0];
+		openAddDocument();
+		newIssuer = first.issuer;
+		newAccountId = first.account?.id ?? "";
+		newBusinessId = first.business?.id ?? "";
+		newFileId = group.file?.id ?? "";
+	}
 
 	function openAddDocument(expected?: Expected) {
 		newFormType = expected?.formType ?? "";
@@ -477,13 +510,41 @@
 	<section class="section">
 		<h2>Documents</h2>
 		<p class="muted">
-			Open a document to fill in its boxes: attach the form and click each figure, or type them in.
+			Each document is a file on hand, and a consolidated statement holds several forms. Open a form to fill in its boxes: click each figure on the file, or type them in.
 		</p>
 		{#if data.status.documents.length === 0}
 			<p class="muted">No documents recorded for {year}.</p>
 		{/if}
-		{#each data.status.documents as doc (doc.id)}
-			<article class="document" id="doc-{doc.id}" class:na={doc.status === "NOT_APPLICABLE"}>
+		{#each documentGroups as group (group.key)}
+			{#if group.file}
+				<article class="document" class:na={group.forms.every((d) => d.status === "NOT_APPLICABLE")}>
+					<header class="document-header file-header">
+						<div class="file-title">
+							<FileText size={16} />
+							<strong>{group.file.filename}</strong>
+							<span class="muted">· {formatSize(group.file.size)} · {group.forms.length} {group.forms.length === 1 ? "form" : "forms"}</span>
+						</div>
+						<div class="document-actions">
+							<Button variant="ghost" size="sm" onclick={() => openAddForm(group)}><Plus size={14} /> Add form</Button>
+						</div>
+					</header>
+					<div class="forms">
+						{#each group.forms as doc (doc.id)}
+							{@render formCard(doc, true)}
+						{/each}
+					</div>
+				</article>
+			{:else}
+				<article class="document" class:na={group.forms[0].status === "NOT_APPLICABLE"}>
+					{@render formCard(group.forms[0], false)}
+				</article>
+			{/if}
+		{/each}
+	</section>
+</div>
+
+{#snippet formCard(doc: Doc, nested: boolean)}
+			<section class="form-card" class:nested={nested} id="doc-{doc.id}" class:na={doc.status === "NOT_APPLICABLE"}>
 				<header class="document-header">
 					<div>
 						<span class="mono form-type">{doc.formType}</span>
@@ -499,16 +560,6 @@
 						{/if}
 						{#if doc.notes}
 							<p class="hint">{doc.notes}</p>
-						{/if}
-						{#if doc.file}
-							{@const others = sharedWith(doc)}
-							<p class="hint file-hint">
-								<FileText size={12} />
-								{doc.file.filename}
-								{#if others.length > 0}
-									<span>· also holds {others.map((d) => d.formType).join(", ")}</span>
-								{/if}
-							</p>
 						{/if}
 					</div>
 					<div class="document-actions">
@@ -590,11 +641,8 @@
 						</tbody>
 					</table>
 				{/if}
-
-			</article>
-		{/each}
-	</section>
-</div>
+			</section>
+{/snippet}
 
 <Modal bind:open={showAddDocument} title="Add document" onclose={() => (showAddDocument = false)}>
 	<form
@@ -1221,6 +1269,38 @@
 		gap: var(--spacing-md);
 	}
 
+	.file-header {
+		align-items: center;
+	}
+
+	.file-title {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-xs);
+		color: var(--color-text-muted);
+	}
+
+	.file-title strong {
+		color: var(--color-text);
+	}
+
+	.forms {
+		display: flex;
+		flex-direction: column;
+		gap: var(--spacing-sm);
+		margin-top: var(--spacing-sm);
+	}
+
+	.form-card.nested {
+		padding: var(--spacing-sm) var(--spacing-md);
+		background: var(--color-bg-alt);
+		border-radius: var(--radius-md);
+	}
+
+	.form-card.na {
+		opacity: 0.7;
+	}
+
 	.document-header .form-type {
 		display: inline-block;
 		margin-right: var(--spacing-sm);
@@ -1238,12 +1318,6 @@
 
 	.lines {
 		margin-top: var(--spacing-sm);
-	}
-
-	.file-hint {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
 	}
 
 	.attach-label,

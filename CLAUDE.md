@@ -275,7 +275,11 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   form from this file" on the viewer, which creates a document with the
   same issuer, account and business). Each document's lines keep their
   own page regions into the shared file. Detaching or deleting a document
-  leaves the file with the others; it is deleted with the last one.
+  leaves the file with the others; it is deleted with the last one. The
+  Documents section of `/tax/<year>` lists each file as the outer entry
+  with its forms inside ("Add form" opens the add-document modal with that
+  file, issuer, account and business filled in); a form with no file is an
+  entry of its own.
   Opening a document at `/tax/documents/<id>` shows the file beside the form's boxes:
   clicking a figure on the page (or dragging a box around one) fills the
   armed box and remembers where on the page it came from, so each line can be
