@@ -117,6 +117,13 @@
 		selectedLineId = line?.id ?? null;
 	}
 
+	// The box code toggles: clicking the selected box's code clears the selection
+	function toggleBox(box: string) {
+		if (activeBox !== box) return selectBox(box);
+		activeBox = null;
+		selectedLineId = null;
+	}
+
 	function onRowKeydown(e: KeyboardEvent, box: string, label: string) {
 		if (e.key === "Enter") {
 			e.preventDefault();
@@ -456,7 +463,7 @@
 						<h3 class="group-heading">{row.group}</h3>
 					{/if}
 					<div class="row" class:active={activeBox === row.box} class:filled={!!line}>
-						<button type="button" class="box-code mono" onclick={() => selectBox(row.box)} title="Select box {row.box}">
+						<button type="button" class="box-code mono" onclick={() => toggleBox(row.box)} title={activeBox === row.box ? `Deselect box ${row.box}` : `Select box ${row.box}`}>
 							{row.box}
 						</button>
 						<div class="row-main">
