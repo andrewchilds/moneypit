@@ -2,6 +2,7 @@ import { getTaxReportData, type ScheduleSection, type TaxCategoryTotal } from '.
 import { getTaxYearStatus, type TaxYearStatus } from './taxYear';
 import { normalizeFormType } from '$lib/taxForms';
 import { computeReturn, type BusinessInput, type DependentInput, type PayerFigure, type ReturnComputation, type ReturnInput, type ScheduleLineFigure } from '../taxReturn/compute';
+import { rowsFromDocument, type CapitalGainRow } from '../taxReturn/form8949';
 import { FILING_STATUSES, getTaxYearConstants, supportedTaxYears, type FilingStatus } from '../taxReturn/constants';
 import type { FactValue } from '../taxModules';
 
@@ -65,6 +66,7 @@ function categoryOn(section: ScheduleSection | undefined, line: string): TaxCate
 }
 
 const reported = (category: TaxCategoryTotal | undefined) => category?.reportedTotal ?? 0;
+const round2 = (n: number) => Math.round(n * 100) / 100 || 0;
 
 /**
  * Assemble the return's input from the tax report, the questionnaire, and
@@ -103,6 +105,9 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 	const retirement = { gross: 0, taxable: 0 };
 	let unemployment = 0;
 	let stateRefund = 0;
+	// Form 8949 rows from the 1099-Bs, and the net gain each box's line puts in a category (subtracted below so it is not counted twice)
+	const capitalGainRows: CapitalGainRow[] = [];
+	const rowGainsByCategory = new Map<string, number>();
 	// Boxes the return reads directly (wages, withholding) need no category
 	const consumed = new Set<string>();
 	for (const doc of docs) {
@@ -134,6 +139,19 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 				const b2 = box('2');
 				if (b1 && !b1.mapped) unemployment += b1.amount;
 				if (b2 && !b2.mapped) stateRefund += b2.amount;
+			} else if (form === '1099-B') {
+				const parsed = rowsFromDocument(doc.issuer, doc.lines.map((l) => ({ id: l.id, box: l.box, amount: Number(l.amount), taxCategoryId: l.taxCategoryId })));
+				for (const lineId of parsed.consumed) consumed.add(lineId);
+				for (const { row, gainLine } of parsed.rows) {
+					capitalGainRows.push(row);
+					if (gainLine?.taxCategoryId) {
+						rowGainsByCategory.set(gainLine.taxCategoryId, round2((rowGainsByCategory.get(gainLine.taxCategoryId) ?? 0) + gainLine.amount));
+					} else {
+						notes.push(
+							`1099-B from ${doc.issuer}, box ${row.box}: ${gainLine ? 'the net gain or loss line has no tax category' : 'no net gain or loss line is entered'}, so the tax report leaves it out; Form 8949 and Schedule D have it.`
+						);
+					}
+				}
 			}
 		}
 	}
@@ -154,6 +172,7 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 	retirement.taxable += reported(categoryOn(form1040, '4b'));
 
 	const taxExempt = report.nonDeductible.income.find((c) => c.taxCategoryName === 'Tax Exempt');
+	const netOnly = (category: TaxCategoryTotal | undefined) => round2(reported(category) - (category?.taxCategoryId ? (rowGainsByCategory.get(category.taxCategoryId) ?? 0) : 0));
 	const ordinaryDividends = categoryOn(scheduleB, '6');
 	const qualifiedDividends = categoryOn(scheduleB, '5');
 
@@ -247,9 +266,11 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 		},
 		retirement,
 		capitalGains: {
-			shortTerm: reported(categoryOn(scheduleD, '1')),
-			longTerm: reported(categoryOn(scheduleD, '8')),
-			distributions: reported(categoryOn(scheduleD, '13'))
+			// What is left of each category once the Form 8949 rows' net figures are taken out: book transactions and net-only document lines
+			shortTerm: netOnly(categoryOn(scheduleD, '1')),
+			longTerm: netOnly(categoryOn(scheduleD, '8')),
+			distributions: reported(categoryOn(scheduleD, '13')),
+			rows: capitalGainRows
 		},
 		unemployment,
 		stateRefund,

@@ -368,7 +368,8 @@ of one account that add up to more than 100% across businesses are flagged.
 draft Form 1040 with its schedules: Schedule C per business (with Part V
 listing the categories behind line 27b and cost of goods sold on line 4),
 Schedule SE per owner, Form 8995 (simplified QBI, with the loss carryforward
-on line 16), Schedules 1, 2, 3, A, B and D, Schedule 8812 (child tax credit
+on line 16), Schedules 1, 2, 3, A and B, Form 8949 with Schedule D (below),
+Schedule 8812 (child tax credit
 and the refundable additional child tax credit) and Schedule EIC with the
 earned income credit (figured the way the EIC table is, at the midpoint of
 each $50 range), through withholding, estimated payments and the refund or
@@ -398,6 +399,26 @@ math, and `warnings` list what the computation could not do (AMT, credits
 other than the child tax credit and EIC, Schedule 1-A deductions, the
 charitable carryover, Form 8995-A above the QBI threshold, a state refund on
 a 1099-G).
+
+A 1099-B is entered per Form 8949 box (A and B short-term, D and E
+long-term; A and D are sales whose basis the broker reported to the IRS).
+The box letter alone (`doc:line <id> --box A --amount <n>`) is the net gain
+or loss, the line mapped to the Schedule D category and what the tax report
+counts; `<box>.proceeds`, `<box>.basis` and `<box>.adj.<code>` are the
+columns Form 8949 prints, an adjustment carrying its column (f) code in
+the box name (`A.adj.W` is the wash sale loss disallowed, 1099-B box 1g;
+any other code works the same way). A box with proceeds or basis entered
+becomes one summary row on Form 8949 (`<issuer> - various`, dates
+"Various"), one page per box with 11 rows, short-term and long-term pages
+paired into as few forms as possible, and the page totals land on Schedule
+D lines 1b, 2, 3, 8b, 9 or 10 with their proceeds, basis and adjustment
+columns. Column (h) is figured from the columns; a net figure entered on
+the 1099-B that disagrees is a warning. Net figures with nothing behind
+them (book transactions, or a 1099-B entered as a net figure only) stay on
+lines 1a and 8a with a warning. `src/lib/server/taxReturn/form8949.ts`
+holds the parsing. On a Box B or E sale whose basis on the 1099-B is wrong,
+enter the correct basis (the IRS has none to correct); a wrong basis on
+Box A or D is a `.adj.B` adjustment against the basis as reported.
 
 Carryovers from last year's return are year-keyed answers, entered as
 positive amounts: `capital_loss_carryover_short` and `_long` (Schedule D

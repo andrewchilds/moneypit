@@ -17,6 +17,23 @@ export interface FormPreset {
 	boxes: FormBoxPreset[];
 }
 
+/**
+ * A 1099-B summarises sales by the box they take on Form 8949. Each box is
+ * four lines: the net gain or loss (the figure the tax report counts), and
+ * the proceeds, cost basis and column (g) adjustment that Form 8949 prints.
+ * An adjustment's code is in the box name (`A.adj.W` is a wash sale loss
+ * disallowed); any other code can be added the same way (`A.adj.B`).
+ */
+function form8949Boxes(box: string, description: string): FormBoxPreset[] {
+	const term = box === 'A' || box === 'B' ? 'short' : 'long';
+	return [
+		{ box, label: `Box ${box} (${description}): net gain or loss`, categoryHints: [`capital gains? - ${term} term`, '^capital gains$'] },
+		{ box: `${box}.proceeds`, label: `Box ${box}: proceeds (1099-B box 1d; Form 8949 column d)` },
+		{ box: `${box}.basis`, label: `Box ${box}: cost or other basis (1099-B box 1e; Form 8949 column e)` },
+		{ box: `${box}.adj.W`, label: `Box ${box}: wash sale loss disallowed (1099-B box 1g; Form 8949 column g, code W)` }
+	];
+}
+
 export const FORM_PRESETS: Record<string, FormPreset> = {
 	'W-2': {
 		name: 'Wage and Tax Statement',
@@ -61,11 +78,7 @@ export const FORM_PRESETS: Record<string, FormPreset> = {
 	},
 	'1099-B': {
 		name: 'Proceeds From Broker Transactions',
-		boxes: [
-			{ box: 'ST', label: 'Short-term net gain or loss', categoryHints: ['capital gains? - short term', '^capital gains$'] },
-			{ box: 'LT', label: 'Long-term net gain or loss', categoryHints: ['capital gains? - long term', '^capital gains$'] },
-			{ box: '4', label: 'Federal income tax withheld', categoryHints: ['federal.*withheld'] }
-		]
+		boxes: [...form8949Boxes('A', 'short-term, basis reported to the IRS'), ...form8949Boxes('B', 'short-term, basis not reported to the IRS'), ...form8949Boxes('D', 'long-term, basis reported to the IRS'), ...form8949Boxes('E', 'long-term, basis not reported to the IRS'), { box: '4', label: 'Federal income tax withheld', categoryHints: ['federal.*withheld'] }]
 	},
 	'1099-R': {
 		name: 'Distributions From Pensions, IRAs, etc.',

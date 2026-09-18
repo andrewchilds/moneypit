@@ -22,6 +22,8 @@ interface FormFieldMap {
 	checks: Record<string, string>;
 	/** Lines whose parentheses are pre-printed on the form, so a loss prints without its own */
 	parenthesized?: string[];
+	/** Further fields that take a line's value as well (the name repeated on page 2) */
+	repeat?: Record<string, string[]>;
 }
 
 const seq = (prefix: string, from: number, count: number, step = 1, pad = 2): string[] =>
@@ -68,6 +70,70 @@ function scheduleCPartVFields(): Record<string, string> {
 		fields[`48.desc.${n}`] = `f2_${13 + 2 * n}[0]`;
 		fields[`48.amount.${n}`] = `f2_${14 + 2 * n}[0]`;
 	}
+	return fields;
+}
+
+/**
+ * Form 8949: Part I on page 1 and Part II on page 2, each ROWS_PER_PAGE rows
+ * of eight fields (description, dates, proceeds, basis, code, adjustment,
+ * gain) and a totals line with four.
+ */
+function form8949Fields(): Record<string, string> {
+	const fields: Record<string, string> = { name: 'f1_01[0]', ssn: 'f1_02[0]' };
+	const columns = ['desc', 'acq', 'sold', 'proc', 'basis', 'code', 'adj', 'gain'];
+	for (const [part, prefix] of [
+		['I', 'f1_'],
+		['II', 'f2_']
+	]) {
+		for (let n = 1; n <= 11; n++) {
+			columns.forEach((column, i) => (fields[`${part}.${n}.${column}`] = `${prefix}${String(3 + 8 * (n - 1) + i).padStart(2, '0')}[0]`));
+		}
+		fields[`${part}.total.proc`] = `${prefix}91[0]`;
+		fields[`${part}.total.basis`] = `${prefix}92[0]`;
+		fields[`${part}.total.adj`] = `${prefix}94[0]`;
+		fields[`${part}.total.gain`] = `${prefix}95[0]`;
+	}
+	return fields;
+}
+
+function form8949Checks(): Record<string, string> {
+	const checks: Record<string, string> = {};
+	['A', 'B', 'C', 'G', 'H', 'I'].forEach((box, i) => (checks[`box:${box}`] = `c1_1[${i}]`));
+	['D', 'E', 'F', 'J', 'K', 'L'].forEach((box, i) => (checks[`box:${box}`] = `c2_1[${i}]`));
+	return checks;
+}
+
+/** Schedule D Parts I and II: four columns (proceeds, basis, adjustments, gain) on the Form 8949 lines, one on the rest */
+function scheduleDFields(): Record<string, string> {
+	const fields: Record<string, string> = { name: 'f1_1[0]', ssn: 'f1_2[0]', '16': 'f2_1[0]', '18': 'f2_2[0]', '19': 'f2_3[0]', '21': 'f2_4[0]' };
+	const rows: [string, number][] = [
+		['1a', 3],
+		['1b', 7],
+		['2', 11],
+		['3', 15],
+		['8a', 23],
+		['8b', 27],
+		['9', 31],
+		['10', 35]
+	];
+	for (const [line, first] of rows) {
+		fields[`${line}.proc`] = `f1_${first}[0]`;
+		fields[`${line}.basis`] = `f1_${first + 1}[0]`;
+		fields[`${line}.adj`] = `f1_${first + 2}[0]`;
+		fields[line] = `f1_${first + 3}[0]`;
+	}
+	const singles: [string, number][] = [
+		['4', 19],
+		['5', 20],
+		['6', 21],
+		['7', 22],
+		['11', 39],
+		['12', 40],
+		['13', 41],
+		['14', 42],
+		['15', 43]
+	];
+	for (const [line, n] of singles) fields[line] = `f1_${n}[0]`;
 	return fields;
 }
 
@@ -274,21 +340,15 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 	},
 	f1040sd: {
 		file: 'f1040sd.pdf',
-		fields: {
-			name: 'f1_1[0]',
-			ssn: 'f1_2[0]',
-			'1a': 'f1_6[0]',
-			'6': 'f1_21[0]',
-			'7': 'f1_22[0]',
-			'8a': 'f1_26[0]',
-			'13': 'f1_41[0]',
-			'14': 'f1_42[0]',
-			'15': 'f1_43[0]',
-			'16': 'f2_1[0]',
-			'21': 'f2_4[0]'
-		},
-		checks: {},
+		fields: scheduleDFields(),
+		checks: { 'qof:yes': 'c1_1[0]', 'qof:no': 'c1_1[1]', '17:yes': 'c2_1[0]', '17:no': 'c2_1[1]', '20:yes': 'c2_2[0]', '20:no': 'c2_2[1]', '22:yes': 'c2_3[0]', '22:no': 'c2_3[1]' },
 		parenthesized: ['6', '14', '21']
+	},
+	f8949: {
+		file: 'f8949.pdf',
+		fields: form8949Fields(),
+		checks: form8949Checks(),
+		repeat: { name: ['f2_01[0]'], ssn: ['f2_02[0]'] }
 	},
 	f1040sse: {
 		file: 'f1040sse.pdf',
@@ -451,6 +511,7 @@ async function fillForm(form: ReturnForm, map: FormFieldMap, year: number): Prom
 			suffix.forEach((s, i) => setText(s, chars[i] ?? '', 9));
 		} else {
 			setText(suffix, value, line.kind === 'text' ? 9 : 10);
+			for (const also of map.repeat?.[line.line] ?? []) setText(also, value, line.kind === 'text' ? 9 : 10);
 		}
 	}
 	for (const key of form.checks) {
@@ -464,7 +525,7 @@ async function fillForm(form: ReturnForm, map: FormFieldMap, year: number): Prom
 	return doc;
 }
 
-/** One PDF with every form of the return, in attachment sequence order. */
+/** One PDF with every form of the return, in attachment sequence order; a form names the pages it uses when not all of them. */
 export async function renderReturnPdf(computation: ReturnComputation): Promise<Uint8Array> {
 	const year = computation.year;
 	const maps = FIELD_MAPS[year];
@@ -475,7 +536,7 @@ export async function renderReturnPdf(computation: ReturnComputation): Promise<U
 	out.setTitle(`Draft ${year} federal return`);
 	for (const form of computation.forms) {
 		const filled = await fillForm(form, maps[form.id], year);
-		const pages = await out.copyPages(filled, filled.getPageIndices());
+		const pages = await out.copyPages(filled, form.pages ? form.pages.map((p) => p - 1) : filled.getPageIndices());
 		for (const page of pages) out.addPage(page);
 	}
 	return out.save();

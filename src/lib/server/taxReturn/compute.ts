@@ -6,7 +6,8 @@
  * What is computed: Schedule C per business, Schedule SE, Form 8995 (the
  * simplified QBI deduction), Schedule 1, Schedule 2 (self-employment tax,
  * additional Medicare tax, net investment income tax), Schedule 3 (an
- * extension payment), Schedules A, B and D, Schedule 8812 (the child tax
+ * extension payment), Schedules A and B, Form 8949 (one row per 1099-B
+ * box, summarised per broker) with Schedule D, Schedule 8812 (the child tax
  * credit and its refundable part), Schedule EIC and the earned income
  * credit, and Form 1040 through the refund or amount owed. Carryovers from
  * last year's return come in as answers (capital loss, qualified business
@@ -17,8 +18,11 @@
  */
 
 import { FILING_STATUS_LABELS, type FilingStatus, type TaxYearConstants } from './constants';
+import { isShortTermBox, LONG_TERM_BOXES, ROWS_PER_PAGE, SCHEDULE_D_LINE, SHORT_TERM_BOXES, type CapitalGainRow } from './form8949';
 
-export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8995';
+export type { CapitalGainRow } from './form8949';
+
+export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f8949' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8995';
 
 export interface PayerFigure {
 	name: string;
@@ -113,8 +117,15 @@ export interface ReturnInput {
 		ordinaryIncludesQualified: boolean;
 	};
 	retirement: { gross: number; taxable: number };
-	/** Net gains from sales, and capital gain distributions from funds (1099-DIV box 2a), which are long-term by law and go on Schedule D line 13 */
-	capitalGains: { shortTerm: number; longTerm: number; distributions: number };
+	/**
+	 * Sales: `rows` are the Form 8949 rows (one per 1099-B box per broker);
+	 * `shortTerm` and `longTerm` are net figures with no proceeds or basis
+	 * behind them (book transactions, a 1099-B entered as a net figure),
+	 * which go on Schedule D lines 1a and 8a; `distributions` are capital
+	 * gain distributions from funds (1099-DIV box 2a), long-term by law, on
+	 * line 13.
+	 */
+	capitalGains: { shortTerm: number; longTerm: number; distributions: number; rows: CapitalGainRow[] };
 	unemployment: number;
 	stateRefund: number;
 	scheduleENet: number;
@@ -159,6 +170,8 @@ export interface ReturnForm {
 	lines: ReturnLine[];
 	/** Boxes to tick on the form, by key (filing status, accounting method) */
 	checks: string[];
+	/** Pages of the blank form to print, 1-based; every page when absent (a Form 8949 with only Part I filled prints page 1) */
+	pages?: number[];
 }
 
 export interface ReturnSummary {
@@ -467,6 +480,83 @@ function scheduleSE(
 	return f;
 }
 
+interface BoxTotal {
+	proceeds: number;
+	basis: number;
+	adjustment: number;
+	gain: number;
+	rows: number;
+}
+
+/**
+ * Form 8949: one page per box with up to ROWS_PER_PAGE rows, short-term
+ * pages on page 1 (Part I) and long-term on page 2 (Part II), paired into
+ * as few forms as possible. Column (h) is figured from the columns; a net
+ * figure entered on the 1099-B that disagrees is a warning.
+ */
+function forms8949(rows: CapitalGainRow[], name: string, ssn: string, warnings: string[]): { forms: ReturnForm[]; totals: Map<string, BoxTotal> } {
+	const totals = new Map<string, BoxTotal>();
+	const pages: { box: string; rows: CapitalGainRow[] }[] = [];
+	for (const box of [...SHORT_TERM_BOXES, ...LONG_TERM_BOXES]) {
+		const boxRows = rows.filter((r) => r.box === box);
+		for (let i = 0; i < boxRows.length; i += ROWS_PER_PAGE) pages.push({ box, rows: boxRows.slice(i, i + ROWS_PER_PAGE) });
+	}
+	const short = pages.filter((p) => isShortTermBox(p.box));
+	const long = pages.filter((p) => !isShortTermBox(p.box));
+	const forms: ReturnForm[] = [];
+	for (let i = 0; i < Math.max(short.length, long.length); i++) {
+		const parts = [
+			...(short[i] ? [{ part: 'I', pageNumber: 1, page: short[i] }] : []),
+			...(long[i] ? [{ part: 'II', pageNumber: 2, page: long[i] }] : [])
+		];
+		const f = new FormBuilder('f8949', 'Form 8949', `Sales and Other Dispositions of Capital Assets (${parts.map((p) => `Part ${p.part} Box ${p.page.box}`).join(', ')})`);
+		f.text('name', 'Name(s) shown on return', name);
+		f.text('ssn', 'Social security number', ssn);
+		f.form.pages = parts.map((p) => p.pageNumber);
+		for (const { part, page } of parts) {
+			f.check(`box:${page.box}`);
+			const pageTotal: BoxTotal = { proceeds: 0, basis: 0, adjustment: 0, gain: 0, rows: page.rows.length };
+			page.rows.forEach((r, n) => {
+				const k = `${part}.${n + 1}`;
+				const row = `Row ${n + 1}`;
+				const adjustment = sum(r.adjustments.map((a) => a.amount));
+				const gain = round2(r.proceeds - r.basis + adjustment);
+				f.text(`${k}.desc`, `${row}: description of property`, r.description);
+				f.text(`${k}.acq`, `${row}: date acquired`, r.dateAcquired);
+				f.text(`${k}.sold`, `${row}: date sold`, r.dateSold);
+				f.amount(`${k}.proc`, `${row}: proceeds`, r.proceeds, 'input');
+				f.amount(`${k}.basis`, `${row}: cost or other basis`, r.basis, 'input');
+				f.text(`${k}.code`, `${row}: adjustment code(s)`, r.adjustments.map((a) => a.code).join(''));
+				f.amount(`${k}.adj`, `${row}: adjustment to gain or loss`, adjustment, 'input', r.adjustments.map((a) => `code ${a.code}: ${money(a.amount)}`).join(', ') || undefined);
+				f.amount(`${k}.gain`, `${row}: gain or loss`, gain, 'computed', `${money(r.proceeds)} less ${money(r.basis)}${adjustment ? ` plus ${money(adjustment)} of adjustments` : ''}`);
+				if (r.reported !== null && Math.abs(r.reported - gain) > 0.005) {
+					warnings.push(
+						`Form 8949 Box ${page.box}, ${r.description}: proceeds less basis plus adjustments come to ${money(gain)}, but the net gain or loss entered on the 1099-B is ${money(r.reported)}; the form uses ${money(gain)}, so check the entries.`
+					);
+				}
+				pageTotal.proceeds = round2(pageTotal.proceeds + r.proceeds);
+				pageTotal.basis = round2(pageTotal.basis + r.basis);
+				pageTotal.adjustment = round2(pageTotal.adjustment + adjustment);
+				pageTotal.gain = round2(pageTotal.gain + gain);
+			});
+			f.amount(`${part}.total.proc`, 'Line 2: total proceeds', pageTotal.proceeds, 'total');
+			f.amount(`${part}.total.basis`, 'Line 2: total cost or other basis', pageTotal.basis, 'total');
+			f.amount(`${part}.total.adj`, 'Line 2: total adjustments', pageTotal.adjustment, 'computed');
+			f.amount(`${part}.total.gain`, `Line 2: total gain or loss (to Schedule D line ${SCHEDULE_D_LINE[page.box]})`, pageTotal.gain, 'total');
+			const t = totals.get(page.box) ?? { proceeds: 0, basis: 0, adjustment: 0, gain: 0, rows: 0 };
+			totals.set(page.box, {
+				proceeds: round2(t.proceeds + pageTotal.proceeds),
+				basis: round2(t.basis + pageTotal.basis),
+				adjustment: round2(t.adjustment + pageTotal.adjustment),
+				gain: round2(t.gain + pageTotal.gain),
+				rows: t.rows + pageTotal.rows
+			});
+		}
+		forms.push(f.form);
+	}
+	return { forms, totals };
+}
+
 export function computeReturn(input: ReturnInput, constants: TaxYearConstants): ReturnComputation {
 	const warnings: string[] = [...input.notes];
 	const status: FilingStatus = input.filingStatus ?? 'single';
@@ -600,38 +690,77 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		);
 	}
 
-	// Schedule D
+	// Form 8949 and Schedule D
 	let line7 = 0;
 	let netLongTermGain = 0;
 	let netCapital = 0;
 	let netShortTerm = 0;
 	let netLongTerm = 0;
 	let scheduleD: FormBuilder | null = null;
-	const { shortTerm, longTerm, distributions } = input.capitalGains;
+	const { shortTerm, longTerm, distributions, rows } = input.capitalGains;
 	const carry = input.carryovers;
-	if (shortTerm !== 0 || longTerm !== 0 || distributions !== 0 || carry.capitalLossShort !== 0 || carry.capitalLossLong !== 0) {
-		scheduleD = new FormBuilder('f1040sd', 'Schedule D', 'Capital Gains and Losses');
-		scheduleD.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
-		scheduleD.text('ssn', 'Your social security number', id.ssn);
-		scheduleD.amount('1a', 'Short-term totals from Form 1099-B (gain or loss)', shortTerm, 'input');
-		const d6 = scheduleD.amount('6', 'Short-term capital loss carryover', -Math.abs(carry.capitalLossShort), 'input', `From last year's Capital Loss Carryover Worksheet`);
-		const d7 = scheduleD.amount('7', 'Net short-term capital gain or loss', shortTerm + d6, 'total', 'Lines 1a through 6');
-		scheduleD.amount('8a', 'Long-term totals from Form 1099-B (gain or loss)', longTerm, 'input');
-		const d13 = scheduleD.amount('13', 'Capital gain distributions', distributions, 'input', 'Box 2a of the 1099-DIVs; always long-term');
-		const d14 = scheduleD.amount('14', 'Long-term capital loss carryover', -Math.abs(carry.capitalLossLong), 'input', `From last year's Capital Loss Carryover Worksheet`);
-		const d15 = scheduleD.amount('15', 'Net long-term capital gain or loss', longTerm + d13 + d14, 'total', 'Lines 8a through 14');
-		const d16 = scheduleD.amount('16', 'Combine lines 7 and 15', d7 + d15, 'total');
+	const f8949 = forms8949(rows, `${id.firstName} ${id.lastName}`.trim(), id.ssn, warnings);
+	if (shortTerm !== 0 || longTerm !== 0 || distributions !== 0 || rows.length > 0 || carry.capitalLossShort !== 0 || carry.capitalLossLong !== 0) {
+		const d = new FormBuilder('f1040sd', 'Schedule D', 'Capital Gains and Losses');
+		scheduleD = d;
+		d.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
+		d.text('ssn', 'Your social security number', id.ssn);
+		// The qualified opportunity fund question at the top of the form is not asked; answered no
+		d.check('qof:no');
+		// A line's proceeds, basis and adjustments from the Form 8949 boxes that feed it; the gain is what combines into line 7 or 15
+		const fromForm8949 = (line: string) => {
+			const boxes = Object.keys(SCHEDULE_D_LINE).filter((b) => SCHEDULE_D_LINE[b] === line && f8949.totals.has(b));
+			if (boxes.length === 0) return 0;
+			const t = boxes.map((b) => f8949.totals.get(b)!);
+			const label = `Totals from Form 8949 with Box ${boxes.join(' or ')} checked`;
+			d.amount(`${line}.proc`, `${label}: proceeds`, sum(t.map((x) => x.proceeds)), 'input');
+			d.amount(`${line}.basis`, `${label}: cost or other basis`, sum(t.map((x) => x.basis)), 'input');
+			d.amount(`${line}.adj`, `${label}: adjustments`, sum(t.map((x) => x.adjustment)), 'input');
+			const count = t.reduce((n, x) => n + x.rows, 0);
+			return d.amount(line, `${label}: gain or loss`, sum(t.map((x) => x.gain)), 'total', `${count} row${count === 1 ? '' : 's'} on Form 8949`);
+		};
+		// A net figure with nothing behind it can only sit on line 1a or 8a, which the form reserves for covered sales without adjustments
+		const netOnly = (line: string, amount: number, term: string) => {
+			if (amount === 0) return 0;
+			warnings.push(
+				`Schedule D line ${line} carries ${money(amount)} of ${term.toLowerCase()} net gain or loss with no proceeds or basis behind it (book transactions, or a 1099-B entered as a net figure); enter the 1099-B's proceeds, basis and adjustments per box so Form 8949 lists them.`
+			);
+			return d.amount(line, `${term} totals from 1099-Bs as net figures (no Form 8949 detail)`, amount, 'input');
+		};
+		const d1a = netOnly('1a', shortTerm, 'Short-term');
+		const d1b = fromForm8949('1b');
+		const d2 = fromForm8949('2');
+		const d3 = fromForm8949('3');
+		const d6 = d.amount('6', 'Short-term capital loss carryover', -Math.abs(carry.capitalLossShort), 'input', `From last year's Capital Loss Carryover Worksheet`);
+		const d7 = d.amount('7', 'Net short-term capital gain or loss', d1a + d1b + d2 + d3 + d6, 'total', 'Lines 1a through 6');
+		const d8a = netOnly('8a', longTerm, 'Long-term');
+		const d8b = fromForm8949('8b');
+		const d9 = fromForm8949('9');
+		const d10 = fromForm8949('10');
+		const d13 = d.amount('13', 'Capital gain distributions', distributions, 'input', 'Box 2a of the 1099-DIVs; always long-term');
+		const d14 = d.amount('14', 'Long-term capital loss carryover', -Math.abs(carry.capitalLossLong), 'input', `From last year's Capital Loss Carryover Worksheet`);
+		const d15 = d.amount('15', 'Net long-term capital gain or loss', d8a + d8b + d9 + d10 + d13 + d14, 'total', 'Lines 8a through 14');
+		const d16 = d.amount('16', 'Combine lines 7 and 15', d7 + d15, 'total');
 		netCapital = d16;
 		netShortTerm = d7;
 		netLongTerm = d15;
 		const limit = constants.capitalLossLimit[status];
-		if (d16 < 0) {
-			line7 = scheduleD.amount('21', `Loss limited to $${limit.toLocaleString('en-US')}`, Math.max(d16, -limit), 'result');
-		} else {
+		if (d16 > 0) {
 			line7 = d16;
+			// Line 17: both a long-term gain and a net gain send the return through the rate worksheets
+			const bothGains = d15 > 0;
+			d.check(bothGains ? '17:yes' : '17:no');
+			if (bothGains) {
+				d.check('20:yes');
+				warnings.push(
+					'Schedule D line 20 is answered yes: no collectibles (28% rate) gain and no unrecaptured section 1250 gain are assumed, so those worksheets are not run.'
+				);
+			}
+		} else {
+			if (d16 < 0) line7 = d.amount('21', `Loss limited to $${limit.toLocaleString('en-US')}`, Math.max(d16, -limit), 'result');
+			d.check(qualifiedDividends > 0 ? '22:yes' : '22:no');
 		}
 		netLongTermGain = d15 > 0 && d16 > 0 ? Math.min(d15, d16) : 0;
-		warnings.push('Schedule D shows net gains only; proceeds and cost basis columns need the 1099-B detail or Form 8949.');
 	}
 	f1040.amount('7', 'Capital gain or loss', line7, 'input');
 
@@ -1066,6 +1195,7 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	if (scheduleB) forms.push(scheduleB.form);
 	for (const { form } of scheduleCs) forms.push(form.form);
 	if (scheduleD) forms.push(scheduleD.form);
+	forms.push(...f8949.forms);
 	for (const se of scheduleSEs) forms.push(se.form.form);
 	if (scheduleEIC) forms.push(scheduleEIC.form);
 	if (s8812) forms.push(s8812.form);

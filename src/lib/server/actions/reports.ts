@@ -892,12 +892,14 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 			}
 		}
 
-		// Categories with document figures but no account activity still belong
-		// in the report: a 1099-B's capital gains have no book transactions.
-		const accountCategoryIds = new Set(accountList.map((a) => a.taxCategoryId));
+		// Categories with document figures but no account activity this year
+		// still belong in the report: a 1099-B's capital gains have no book
+		// transactions, and an account on the category that saw nothing this
+		// year does not change that.
+		const activeCategoryIds = new Set(Array.from(categoryMap.values()).map((c) => c.taxCategoryId));
 		for (const category of allCategories) {
 			const docs = documentTotals.get(category.id);
-			if (!docs || accountCategoryIds.has(category.id)) continue;
+			if (!docs || activeCategoryIds.has(category.id)) continue;
 			if (classifyDocumentOnlyCategory(category.name, category.scheduleRef) !== accountType) continue;
 			const split = scopeFor(category.scheduleRef, null) !== null;
 			const scopes = split ? new Set(docs.lines.map(scopeOfLine)) : new Set<string | null>([null]);
