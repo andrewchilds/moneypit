@@ -5,13 +5,15 @@
 		label: string;
 		icon?: Snippet;
 		variant?: 'default' | 'positive' | 'negative' | 'warning' | 'liability';
+		/** Makes the card a link (to the page or tab the figure summarizes) */
+		href?: string;
 		children: Snippet;
 	}
 
-	let { label, icon, variant = 'default', children }: Props = $props();
+	let { label, icon, variant = 'default', href, children }: Props = $props();
 </script>
 
-<div class="stat-card {variant}">
+<svelte:element this={href ? 'a' : 'div'} {href} class="stat-card {variant}" class:link={!!href} data-sveltekit-noscroll>
 	{#if icon}
 		<div class="stat-icon">
 			{@render icon()}
@@ -21,7 +23,7 @@
 		<span class="stat-value">{@render children()}</span>
 		<span class="stat-label">{label}</span>
 	</div>
-</div>
+</svelte:element>
 
 <style>
 	.stat-card {
@@ -32,6 +34,15 @@
 		background: var(--color-bg);
 		border: 1px solid var(--color-border-light);
 		border-radius: var(--radius-lg);
+	}
+
+	.stat-card.link {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.stat-card.link:hover {
+		border-color: var(--color-primary);
 	}
 
 	.stat-card.positive {

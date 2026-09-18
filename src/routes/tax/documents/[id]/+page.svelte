@@ -231,7 +231,7 @@
 <div class="annotate-page">
 	<header class="page-header">
 		<div class="title">
-			<a href="/tax/{doc.year}#doc-{doc.id}" class="back"><ArrowLeft size={16} /> Tax prep {doc.year}</a>
+			<a href="/tax/{doc.year}?tab=documents#doc-{doc.id}" class="back"><ArrowLeft size={16} /> Tax prep {doc.year}</a>
 			<h1>
 				<span class="mono form-type">{doc.formType}</span>
 				{doc.issuer}

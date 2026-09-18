@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from "$app/forms";
 	import { goto } from "$app/navigation";
+	import { page } from "$app/state";
 	import { CircleHelp, FileCheck, FileWarning, Plus, Trash2, X, ChevronRight, Briefcase, FileUp, FileText, Crosshair, CircleCheck, CircleAlert, CircleDashed } from "lucide-svelte";
 	import { sniffFileText } from "$lib/pdf/client";
 	import { detectFormType } from "$lib/documentFigures";
@@ -17,6 +18,29 @@
 
 	const year = $derived(data.status.year);
 	const formTypes = $derived(Object.keys(data.formPresets));
+
+	// The page is split into tabs; the active one lives in the URL (?tab=) so
+	// it survives form submits and the document viewer can link back to it.
+	type TabId = "businesses" | "questions" | "documents";
+	interface Tab {
+		id: TabId;
+		label: string;
+		count: number;
+		countLabel: string;
+	}
+	const tabs = $derived.by((): Tab[] => {
+		const list: Tab[] = [];
+		if (data.hasPerBusinessModule) {
+			list.push({ id: "businesses", label: "Businesses", count: data.status.businesses.length, countLabel: "businesses" });
+		}
+		list.push({ id: "questions", label: "Questions", count: data.status.openQuestions, countLabel: "open" });
+		list.push({ id: "documents", label: "Documents", count: data.status.missingDocuments, countLabel: "missing" });
+		return list;
+	});
+	const activeTab = $derived.by((): TabId => {
+		const requested = page.url.searchParams.get("tab");
+		return tabs.find((t) => t.id === requested)?.id ?? tabs[0].id;
+	});
 
 	// Add-document modal, optionally prefilled from an expected document
 	let showAddDocument = $state(false);
@@ -142,7 +166,7 @@
 
 	function handleYearChange(event: Event) {
 		const select = event.target as HTMLSelectElement;
-		goto(`/tax/${select.value}`);
+		goto(`/tax/${select.value}?tab=${activeTab}`);
 	}
 
 	function formatCurrency(value: number): string {
@@ -192,15 +216,15 @@
 	</header>
 
 	<StatsGrid>
-		<StatCard label="Open Questions" variant={data.status.openQuestions > 0 ? "negative" : "positive"}>
+		<StatCard label="Open Questions" variant={data.status.openQuestions > 0 ? "negative" : "positive"} href="?tab=questions">
 			{#snippet icon()}<CircleHelp size={24} />{/snippet}
 			{data.status.openQuestions}
 		</StatCard>
-		<StatCard label="Missing Documents" variant={data.status.missingDocuments > 0 ? "negative" : "positive"}>
+		<StatCard label="Missing Documents" variant={data.status.missingDocuments > 0 ? "negative" : "positive"} href="?tab=documents">
 			{#snippet icon()}<FileWarning size={24} />{/snippet}
 			{data.status.missingDocuments}
 		</StatCard>
-		<StatCard label="Documents On Hand" variant="positive">
+		<StatCard label="Documents On Hand" variant="positive" href="?tab=documents">
 			{#snippet icon()}<FileCheck size={24} />{/snippet}
 			{data.status.documents.length}
 		</StatCard>
@@ -210,15 +234,26 @@
 		<div class="error-banner">{form.error}</div>
 	{/if}
 
-	<!-- Questions -->
-	{#if data.status.modules.length === 0}
-		<section class="section">
-			<p class="muted">No tax modules are enabled for this book. Enable one in Settings to get a questionnaire.</p>
-		</section>
-	{/if}
+	<nav class="tab-bar" aria-label="Tax prep sections">
+		{#each tabs as tab (tab.id)}
+			<a
+				href="?tab={tab.id}"
+				class="tab"
+				class:active={activeTab === tab.id}
+				aria-current={activeTab === tab.id ? "page" : undefined}
+				data-sveltekit-noscroll
+				data-sveltekit-replacestate
+			>
+				{tab.label}
+				{#if tab.count > 0}
+					<span class="tab-count" class:attention={tab.id !== "businesses"} title="{tab.count} {tab.countLabel}">{tab.count}</span>
+				{/if}
+			</a>
+		{/each}
+	</nav>
 
 	<!-- Businesses -->
-	{#if data.hasPerBusinessModule}
+	{#if activeTab === "businesses"}
 		<section class="section">
 			<div class="section-header">
 				<h2>Businesses</h2>
@@ -226,7 +261,7 @@
 			<p class="muted">
 				Each business files its own Schedule C. An account is attached to a business at the percentage the business
 				claims: its own accounts at 100%, a personal account it uses partly (phone, internet) at less, and an account
-				can be attached to more than one business. The Schedule C questions below are asked once per business.
+				can be attached to more than one business. The Schedule C questions on the Questions tab are asked once per business.
 				{#if businesses.length === 0}
 					With no businesses, the book is treated as a single business.
 				{/if}
@@ -375,172 +410,182 @@
 		</section>
 	{/if}
 
-	{#each data.status.modules as module (`${module.moduleId}:${module.businessId ?? ""}`)}
-		{@const visible = module.questions.filter((q) => q.visible)}
-		{@const scope = module.businessId ?? ""}
-		{#if visible.length > 0}
+	<!-- Questions -->
+	{#if activeTab === "questions"}
+		{#if data.status.modules.length === 0}
 			<section class="section">
-				<h2>
-					{module.name}
-					{#if module.businessName}
-						<span class="business-tag"><Briefcase size={14} /> {module.businessName}</span>
-					{/if}
-				</h2>
-				<div class="questions">
-					{#each visible as q (q.key)}
-						<form method="POST" action="?/answer" use:enhance class="question" class:answered={q.answered}>
-							<input type="hidden" name="key" value={q.key} />
-							<input type="hidden" name="businessId" value={scope} />
-							<div class="question-text">
-								<label for="q-{q.key}-{scope}">{q.prompt}</label>
-								{#if q.description}
-									<p class="hint">{q.description}</p>
-								{/if}
-								{#if q.carryForward}
-									<span class="tag">carries forward</span>
-								{:else if q.answered && q.answerYear === null}
-									<span class="tag">from an earlier year</span>
-								{/if}
-							</div>
-							<div class="question-input">
-								{#if q.type === "boolean"}
-									<select id="q-{q.key}-{scope}" name="value" value={formatAnswer(q)}>
-										<option value="">—</option>
-										<option value="true">Yes</option>
-										<option value="false">No</option>
-									</select>
-								{:else if q.type === "choice"}
-									<select id="q-{q.key}-{scope}" name="value" value={formatAnswer(q)}>
-										<option value="">—</option>
-										{#each q.options ?? [] as opt (opt.value)}
-											<option value={opt.value}>{opt.label}</option>
-										{/each}
-									</select>
-								{:else if q.type === "amount" || q.type === "number"}
-									<input
-										id="q-{q.key}-{scope}"
-										type="number"
-										name="value"
-										step={q.type === "amount" ? "0.01" : "1"}
-										value={formatAnswer(q)}
-										placeholder={q.type === "amount" ? "0.00" : ""}
-									/>
-								{:else if q.type === "date"}
-									<input id="q-{q.key}-{scope}" type="date" name="value" value={formatAnswer(q)} />
-								{:else if q.type === "accounts"}
-									<select id="q-{q.key}-{scope}" name="value" multiple size={Math.min(8, Math.max(4, expenseAccounts.length))} class="accounts-select">
-										{#each expenseAccounts as a (a.id)}
-											<option value={a.id} selected={answeredAccounts(q).includes(a.id)}>{a.path}</option>
-										{/each}
-									</select>
-								{:else}
-									<input id="q-{q.key}-{scope}" type="text" name="value" value={formatAnswer(q)} />
-								{/if}
-								<Button variant="secondary" size="sm" type="submit">Save</Button>
-							</div>
-							{#if q.answered}
-								<span class="current">{displayAnswer(q)}</span>
-							{/if}
-						</form>
-					{/each}
-				</div>
+				<p class="muted">No tax modules are enabled for this book. Enable one in Settings to get a questionnaire.</p>
 			</section>
 		{/if}
-	{/each}
-
-	<!-- Expected documents -->
-	<section class="section">
-		<div class="section-header">
-			<h2>Expected Documents</h2>
-			<Button variant="primary" size="sm" onclick={() => openAddDocument()}>
-				<Plus size={16} /> Add document
-			</Button>
-		</div>
-		<p class="muted">
-			Inferred from this year's transactions and your answers. When a form arrives, add it with its PDF and read the
-			figures straight off the page. Mark one not applicable if it won't arrive.
-		</p>
-		{#if data.status.expectedDocuments.length === 0}
-			<p class="muted">Nothing expected yet.</p>
-		{:else}
-			<table class="table">
-				<thead>
-					<tr>
-						<th>Form</th>
-						<th>From</th>
-						<th>Why</th>
-						<th>Status</th>
-						<th></th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each data.status.expectedDocuments as exp (exp.formType + exp.institution + exp.reason)}
-						<tr>
-							<td class="mono">{exp.formType}</td>
-							<td>{exp.institution || businessName(exp.businessId) || "—"}</td>
-							<td class="muted">{exp.reason}</td>
-							<td>
-								<span class="status status-{exp.status}">
-									{exp.status === "received" ? "Received" : exp.status === "not_applicable" ? "N/A" : "Missing"}
-								</span>
-							</td>
-							<td class="actions">
-								{#if exp.status === "missing"}
-									<Button size="sm" onclick={() => openAddDocument(exp)}><FileUp size={14} /> Add</Button>
-									<form method="POST" action="?/addDocument" use:enhance>
-										<input type="hidden" name="formType" value={exp.formType} />
-										<input type="hidden" name="issuer" value={exp.institution || exp.formType} />
-										<input type="hidden" name="accountId" value={exp.accountIds[0] ?? ""} />
-										<input type="hidden" name="businessId" value={exp.businessId ?? ""} />
-										<input type="hidden" name="status" value="NOT_APPLICABLE" />
-										<Button variant="ghost" size="sm" type="submit">Mark N/A</Button>
-									</form>
-								{:else if exp.documentId}
-									<a href="/tax/documents/{exp.documentId}">Open</a>
+		{#each data.status.modules as module (`${module.moduleId}:${module.businessId ?? ""}`)}
+			{@const visible = module.questions.filter((q) => q.visible)}
+			{@const scope = module.businessId ?? ""}
+			{#if visible.length > 0}
+				<section class="section">
+					<h2>
+						{module.name}
+						{#if module.businessName}
+							<span class="business-tag"><Briefcase size={14} /> {module.businessName}</span>
+						{/if}
+					</h2>
+					<div class="questions">
+						{#each visible as q (q.key)}
+							<form method="POST" action="?/answer" use:enhance class="question" class:answered={q.answered}>
+								<input type="hidden" name="key" value={q.key} />
+								<input type="hidden" name="businessId" value={scope} />
+								<div class="question-text">
+									<label for="q-{q.key}-{scope}">{q.prompt}</label>
+									{#if q.description}
+										<p class="hint">{q.description}</p>
+									{/if}
+									{#if q.carryForward}
+										<span class="tag">carries forward</span>
+									{:else if q.answered && q.answerYear === null}
+										<span class="tag">from an earlier year</span>
+									{/if}
+								</div>
+								<div class="question-input">
+									{#if q.type === "boolean"}
+										<select id="q-{q.key}-{scope}" name="value" value={formatAnswer(q)}>
+											<option value="">—</option>
+											<option value="true">Yes</option>
+											<option value="false">No</option>
+										</select>
+									{:else if q.type === "choice"}
+										<select id="q-{q.key}-{scope}" name="value" value={formatAnswer(q)}>
+											<option value="">—</option>
+											{#each q.options ?? [] as opt (opt.value)}
+												<option value={opt.value}>{opt.label}</option>
+											{/each}
+										</select>
+									{:else if q.type === "amount" || q.type === "number"}
+										<input
+											id="q-{q.key}-{scope}"
+											type="number"
+											name="value"
+											step={q.type === "amount" ? "0.01" : "1"}
+											value={formatAnswer(q)}
+											placeholder={q.type === "amount" ? "0.00" : ""}
+										/>
+									{:else if q.type === "date"}
+										<input id="q-{q.key}-{scope}" type="date" name="value" value={formatAnswer(q)} />
+									{:else if q.type === "accounts"}
+										<select id="q-{q.key}-{scope}" name="value" multiple size={Math.min(8, Math.max(4, expenseAccounts.length))} class="accounts-select">
+											{#each expenseAccounts as a (a.id)}
+												<option value={a.id} selected={answeredAccounts(q).includes(a.id)}>{a.path}</option>
+											{/each}
+										</select>
+									{:else}
+										<input id="q-{q.key}-{scope}" type="text" name="value" value={formatAnswer(q)} />
+									{/if}
+									<Button variant="secondary" size="sm" type="submit">Save</Button>
+								</div>
+								{#if q.answered}
+									<span class="current">{displayAnswer(q)}</span>
 								{/if}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		{/if}
-	</section>
-
-	<!-- Documents on hand -->
-	<section class="section">
-		<h2>Documents</h2>
-		<p class="muted">
-			Each document is a file on hand, and a consolidated statement holds several forms. Open a form to fill in its boxes: click each figure on the file, or type them in.
-		</p>
-		{#if data.status.documents.length === 0}
-			<p class="muted">No documents recorded for {year}.</p>
-		{/if}
-		{#each documentGroups as group (group.key)}
-			{#if group.file}
-				<article class="document" class:na={group.forms.every((d) => d.status === "NOT_APPLICABLE")}>
-					<header class="document-header file-header">
-						<div class="file-title">
-							<FileText size={16} />
-							<strong>{group.file.filename}</strong>
-							<span class="muted">· {formatSize(group.file.size)} · {group.forms.length} {group.forms.length === 1 ? "form" : "forms"}</span>
-						</div>
-						<div class="document-actions">
-							<Button variant="ghost" size="sm" onclick={() => openAddForm(group)}><Plus size={14} /> Add form</Button>
-						</div>
-					</header>
-					<div class="forms">
-						{#each group.forms as doc (doc.id)}
-							{@render formCard(doc, true)}
+							</form>
 						{/each}
 					</div>
-				</article>
-			{:else}
-				<article class="document" class:na={group.forms[0].status === "NOT_APPLICABLE"}>
-					{@render formCard(group.forms[0], false)}
-				</article>
+				</section>
 			{/if}
 		{/each}
-	</section>
+	{/if}
+
+	{#if activeTab === "documents"}
+		<!-- Expected documents -->
+		<section class="section">
+			<div class="section-header">
+				<h2>Expected Documents</h2>
+				<Button variant="primary" size="sm" onclick={() => openAddDocument()}>
+					<Plus size={16} /> Add document
+				</Button>
+			</div>
+			<p class="muted">
+				Inferred from this year's transactions and your answers. When a form arrives, add it with its PDF and read the
+				figures straight off the page. Mark one not applicable if it won't arrive.
+			</p>
+			{#if data.status.expectedDocuments.length === 0}
+				<p class="muted">Nothing expected yet.</p>
+			{:else}
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Form</th>
+							<th>From</th>
+							<th>Why</th>
+							<th>Status</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.status.expectedDocuments as exp (exp.formType + exp.institution + exp.reason)}
+							<tr>
+								<td class="mono">{exp.formType}</td>
+								<td>{exp.institution || businessName(exp.businessId) || "—"}</td>
+								<td class="muted">{exp.reason}</td>
+								<td>
+									<span class="status status-{exp.status}">
+										{exp.status === "received" ? "Received" : exp.status === "not_applicable" ? "N/A" : "Missing"}
+									</span>
+								</td>
+								<td class="actions">
+									{#if exp.status === "missing"}
+										<Button size="sm" onclick={() => openAddDocument(exp)}><FileUp size={14} /> Add</Button>
+										<form method="POST" action="?/addDocument" use:enhance>
+											<input type="hidden" name="formType" value={exp.formType} />
+											<input type="hidden" name="issuer" value={exp.institution || exp.formType} />
+											<input type="hidden" name="accountId" value={exp.accountIds[0] ?? ""} />
+											<input type="hidden" name="businessId" value={exp.businessId ?? ""} />
+											<input type="hidden" name="status" value="NOT_APPLICABLE" />
+											<Button variant="ghost" size="sm" type="submit">Mark N/A</Button>
+										</form>
+									{:else if exp.documentId}
+										<a href="/tax/documents/{exp.documentId}">Open</a>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
+		</section>
+
+		<!-- Documents on hand -->
+		<section class="section">
+			<h2>Documents</h2>
+			<p class="muted">
+				Each document is a file on hand, and a consolidated statement holds several forms. Open a form to fill in its boxes: click each figure on the file, or type them in.
+			</p>
+			{#if data.status.documents.length === 0}
+				<p class="muted">No documents recorded for {year}.</p>
+			{/if}
+			{#each documentGroups as group (group.key)}
+				{#if group.file}
+					<article class="document" class:na={group.forms.every((d) => d.status === "NOT_APPLICABLE")}>
+						<header class="document-header file-header">
+							<div class="file-title">
+								<FileText size={16} />
+								<strong>{group.file.filename}</strong>
+								<span class="muted">· {formatSize(group.file.size)} · {group.forms.length} {group.forms.length === 1 ? "form" : "forms"}</span>
+							</div>
+							<div class="document-actions">
+								<Button variant="ghost" size="sm" onclick={() => openAddForm(group)}><Plus size={14} /> Add form</Button>
+							</div>
+						</header>
+						<div class="forms">
+							{#each group.forms as doc (doc.id)}
+								{@render formCard(doc, true)}
+							{/each}
+						</div>
+					</article>
+				{:else}
+					<article class="document" class:na={group.forms[0].status === "NOT_APPLICABLE"}>
+						{@render formCard(group.forms[0], false)}
+					</article>
+				{/if}
+			{/each}
+		</section>
+	{/if}
 </div>
 
 {#snippet formCard(doc: Doc, nested: boolean)}
@@ -841,6 +886,50 @@
 		background: var(--color-danger-light);
 		border: 1px solid var(--color-danger);
 		border-radius: var(--radius-md);
+	}
+
+	.tab-bar {
+		display: flex;
+		gap: var(--spacing-xs);
+		margin-bottom: var(--spacing-lg);
+		border-bottom: 1px solid var(--color-border);
+	}
+
+	.tab {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--spacing-xs);
+		margin-bottom: -1px;
+		padding: var(--spacing-sm) var(--spacing-md);
+		border-bottom: 2px solid transparent;
+		color: var(--color-text-muted);
+		font-size: 14px;
+		font-weight: 500;
+		text-decoration: none;
+	}
+
+	.tab:hover {
+		color: var(--color-text);
+	}
+
+	.tab.active {
+		color: var(--color-primary);
+		border-bottom-color: var(--color-primary);
+	}
+
+	.tab-count {
+		padding: 0 6px;
+		border-radius: 999px;
+		background: var(--color-bg-alt);
+		color: var(--color-text-muted);
+		font-size: 12px;
+		font-weight: 500;
+	}
+
+	/* Open questions and missing documents are work to do */
+	.tab-count.attention {
+		background: var(--color-warning-light);
+		color: var(--color-text);
 	}
 
 	.section {
