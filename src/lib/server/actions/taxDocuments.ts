@@ -58,7 +58,7 @@ export const MAX_DOCUMENT_FILE_BYTES = 25 * 1024 * 1024;
 
 // A file's documents, so a consolidated statement shows every form read from it
 const fileDocumentsSelect = {
-	select: { id: true, formType: true, issuer: true, year: true },
+	select: { id: true, formType: true, issuer: true, year: true, account: { select: { id: true, path: true } } },
 	orderBy: [{ formType: 'asc' as const }, { issuer: 'asc' as const }]
 };
 

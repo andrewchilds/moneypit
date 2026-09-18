@@ -12,6 +12,7 @@ import {
 	type LineRegion
 } from '$lib/server/actions/taxDocuments';
 import { listTaxCategories } from '$lib/server/actions/taxCategories';
+import { listAccounts } from '$lib/server/actions/accounts';
 import { FORM_PRESETS } from '$lib/taxForms';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -23,7 +24,11 @@ async function loadDocument(id: string, bookId: string) {
 
 export const load: PageServerLoad = async ({ params, locals }) => {
 	const doc = await loadDocument(params.id, locals.bookId);
-	const [taxCategories, files] = await Promise.all([listTaxCategories(locals.bookId), listDocumentFiles(locals.bookId, doc.year)]);
+	const [taxCategories, files, accounts] = await Promise.all([
+		listTaxCategories(locals.bookId),
+		listDocumentFiles(locals.bookId, doc.year),
+		listAccounts(locals.bookId)
+	]);
 	return {
 		document: {
 			...doc,
@@ -32,6 +37,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		},
 		preset: FORM_PRESETS[doc.formType] ?? null,
 		taxCategories: taxCategories.map((c) => ({ id: c.id, name: c.name, scheduleRef: c.scheduleRef })),
+		accounts: accounts.map((a) => ({ id: a.id, path: a.path })),
 		// Files on other documents this year, so this one can be read from
 		// an upload already on hand (a consolidated 1099)
 		otherFiles: files.filter((f) => f.id !== doc.file?.id),
@@ -142,6 +148,20 @@ export const actions: Actions = {
 		await loadDocument(params.id, locals.bookId);
 		try {
 			await detachDocumentFile(params.id);
+			return { success: true };
+		} catch (e) {
+			return fail(400, { error: (e as Error).message });
+		}
+	},
+
+	// The account this form is tied to decides how much of the book total its
+	// boxes replace; '' detaches it so the form replaces the whole category
+	setAccount: async ({ params, request, locals }) => {
+		await loadDocument(params.id, locals.bookId);
+		const data = await request.formData();
+		const accountId = ((data.get('accountId') as string) ?? '').trim() || null;
+		try {
+			await updateTaxDocument(params.id, { accountId });
 			return { success: true };
 		} catch (e) {
 			return fail(400, { error: (e as Error).message });

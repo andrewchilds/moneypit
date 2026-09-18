@@ -608,7 +608,7 @@
 					<article class="document" class:na={group.forms.every((d) => d.status === "NOT_APPLICABLE")}>
 						<header class="document-header file-header">
 							<div class="file-title">
-								<FileText size={16} />
+								<FileText size={18} />
 								<strong>{group.file.filename}</strong>
 								<span class="muted">· {formatSize(group.file.size)} · {group.forms.length} {group.forms.length === 1 ? "form" : "forms"} attached</span>
 							</div>
@@ -1507,7 +1507,9 @@
 		color: var(--color-text-muted);
 	}
 
+	/* The file is the outer entry; its name sits above the forms read from it */
 	.file-title strong {
+		font-size: 16px;
 		color: var(--color-text);
 	}
 

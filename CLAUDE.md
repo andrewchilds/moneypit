@@ -262,7 +262,8 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   flagged as untied (`untied` in `tax:status`, a yellow "no account" chip
   on the Documents tab whose tooltip (`Tooltip` in
   `src/lib/components/ui`, a styled popup on hover or focus taking `text`
-  or a `content` snippet) carries the warning, a banner on the viewer):
+  or a `content` snippet) carries the warning, a banner on the viewer whose
+  link focuses the account picker in its form pane):
   the warning names
   each category its boxes land on and the book activity there by
   counterparty account, since the whole of it is replaced. Forms whose
@@ -293,7 +294,10 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   with its forms inside ("Add form" opens the add-document modal with that
   file, issuer, account and business filled in); a form with no file is an
   entry of its own.
-  Opening a document at `/tax/documents/<id>` shows the file beside the form's boxes:
+  Opening a document at `/tax/documents/<id>` shows the file beside the form's boxes
+  (the form pane carries the account picker, since the account belongs to the
+  form and not the file; the header lists the other forms read from the same
+  file with the account each is tied to):
   clicking a figure on the page (or dragging a box around one) fills the
   selected box and remembers where on the page it came from, so each line can be
   traced back to the form. When the selected box is empty or zero the figure is

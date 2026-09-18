@@ -106,6 +106,17 @@
 		await post("addLine", { box, label, amount: figureInput(line.amount), category });
 	}
 
+	// ---- The account this form is tied to ----
+
+	async function setAccount(accountId: string) {
+		await post("setAccount", { accountId });
+	}
+
+	function focusAccount() {
+		if (!showForm) setLayout("split");
+		queueMicrotask(() => document.getElementById("form-account")?.focus());
+	}
+
 	async function deleteLine(id: string) {
 		if (selectedLineId === id) selectedLineId = null;
 		await post("deleteLine", { id });
@@ -276,14 +287,16 @@
 			<h1>
 				<span class="mono form-type">{doc.formType}</span>
 				{doc.issuer}
-				{#if doc.account}<span class="muted">· {doc.account.path}</span>{/if}
 				{#if doc.business}<span class="business-tag"><Briefcase size={12} /> {doc.business.name}</span>{/if}
 			</h1>
 			{#if siblings.length > 0}
 				<p class="siblings muted small">
-					Also in this file:
+					Other forms read from this file, each tied to its own account:
 					{#each siblings as sibling (sibling.id)}
-						<a href="/tax/documents/{sibling.id}"><span class="mono">{sibling.formType}</span> {sibling.issuer}</a>
+						<a href="/tax/documents/{sibling.id}">
+							<span class="mono">{sibling.formType}</span> {sibling.issuer}
+							<span class="sibling-account" class:unset={!sibling.account}>· {sibling.account?.path ?? "no account"}</span>
+						</a>
 					{/each}
 				</p>
 			{/if}
@@ -348,7 +361,7 @@
 			<TriangleAlert size={16} />
 			<span>
 				<strong>Not tied to an account.</strong> Each mapped box replaces the whole of its category on the tax report, including what the books have from other accounts.
-				<a href="/tax/{doc.year}?tab=documents#doc-{doc.id}">Tie it to an account</a> so it replaces only that account's figure.
+				<button type="button" class="link-button" onclick={focusAccount}>Tie it to an account</button> so it replaces only that account's figure.
 			</span>
 		</div>
 	{/if}
@@ -448,6 +461,22 @@
 					<span class="muted small">{doc.file.filename} · {formatSize(doc.file.size)}</span>
 				{/if}
 			</div>
+			<label class="form-account" title="The account this form was issued for. Its boxes replace only that account's share of the books; with no account they replace the whole category.">
+				<span class="small">Account</span>
+				<select
+					id="form-account"
+					class="inline-select"
+					class:unset={!doc.account}
+					value={doc.account?.id ?? ""}
+					disabled={busy}
+					onchange={(e) => setAccount((e.currentTarget as HTMLSelectElement).value)}
+				>
+					<option value="">No account</option>
+					{#each data.accounts as a (a.id)}
+						<option value={a.id}>{a.path}</option>
+					{/each}
+				</select>
+			</label>
 			<p class="muted small">
 				{#if doc.file}
 					Click a box to select it, then click its figure on the form. Or type amounts directly.
@@ -621,6 +650,49 @@
 		text-decoration: none;
 	}
 
+	.sibling-account {
+		color: var(--color-text-muted);
+	}
+
+	.sibling-account.unset {
+		font-style: italic;
+	}
+
+	.link-button {
+		padding: 0;
+		font: inherit;
+		color: var(--color-primary);
+		background: none;
+		border: none;
+		text-decoration: underline;
+		cursor: pointer;
+	}
+
+	.form-account {
+		display: flex;
+		align-items: center;
+		gap: var(--spacing-sm);
+	}
+
+	.form-account > span {
+		color: var(--color-text-muted);
+	}
+
+	.inline-select {
+		flex: 1;
+		min-width: 0;
+		padding: 4px 8px;
+		font-size: 13px;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-sm);
+		background: var(--color-bg);
+	}
+
+	.inline-select.unset {
+		color: var(--color-text-muted);
+		font-style: italic;
+	}
+
 	.add-form-select {
 		max-width: 260px;
 		padding: 6px 8px;
@@ -679,10 +751,6 @@
 		flex-shrink: 0;
 		margin-top: 1px;
 		color: #b8860b;
-	}
-
-	.warning-banner a {
-		color: var(--color-primary);
 	}
 
 	.workspace {
