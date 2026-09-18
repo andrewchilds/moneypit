@@ -1,5 +1,17 @@
 <script lang="ts">
-	import { ChevronRight, ChevronDown, AlertTriangle, ArrowRight, Check, Download, Briefcase, FileText, DollarSign, Receipt, Info } from "lucide-svelte";
+	import {
+		ChevronRight,
+		ChevronDown,
+		AlertTriangle,
+		ArrowRight,
+		Check,
+		Download,
+		Briefcase,
+		FileText,
+		DollarSign,
+		Receipt,
+		Info
+	} from "lucide-svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import Button from "$lib/components/ui/Button.svelte";
@@ -30,14 +42,26 @@
 
 	// Unused input lines stay off the page, as they stay blank on the form
 	const visibleLines = (form: Form): Line[] =>
-		form.lines.filter((l) => l.kind === "text" ? !!l.text : l.amount !== 0 || l.kind === "total" || l.kind === "result");
+		form.lines.filter((l) =>
+			l.kind === "text" ? !!l.text : l.amount !== 0 || l.kind === "total" || l.kind === "result"
+		);
 
 	function formatCurrency(value: number): string {
-		return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(value);
+		return new Intl.NumberFormat("en-US", {
+			style: "currency",
+			currency: "USD",
+			minimumFractionDigits: 0,
+			maximumFractionDigits: 0
+		}).format(value);
 	}
 
 	function formatCurrencyPrecise(value: number): string {
-		return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+		return new Intl.NumberFormat("en-US", {
+			style: "currency",
+			currency: "USD",
+			minimumFractionDigits: 2,
+			maximumFractionDigits: 2
+		}).format(value);
 	}
 
 	function handleYearChange(event: Event) {
@@ -75,13 +99,6 @@
 			<span>{data.result.reason} Tax tables exist for {data.result.supportedYears.join(", ")}.</span>
 		</div>
 	{:else if computation}
-		<p class="lede">
-			A draft {data.year} federal return, {computation.filingStatusLabel.toLowerCase()}, built from the tax report's figures and the
-			documents on hand. Every line shows where its number came from. It is an estimate for checking against
-			software or a preparer, not a filed return.
-			{#if !data.canRenderPdf}The IRS forms for {data.year} are not on file, so there is no PDF for this year.{/if}
-		</p>
-
 		<StatsGrid>
 			<StatCard label="Adjusted gross income">
 				{#snippet icon()}<DollarSign size={24} />{/snippet}
@@ -109,11 +126,20 @@
 		</StatsGrid>
 
 		<div class="summary-line">
-			<span>{computation.summary.deductionKind === "itemized" ? "Itemized deductions" : "Standard deduction"} {formatCurrencyPrecise(computation.summary.deduction)}</span>
-			{#if computation.summary.qbiDeduction > 0}<span>QBI deduction {formatCurrencyPrecise(computation.summary.qbiDeduction)}</span>{/if}
+			<span
+				>{computation.summary.deductionKind === "itemized" ? "Itemized deductions" : "Standard deduction"}
+				{formatCurrencyPrecise(computation.summary.deduction)}</span
+			>
+			{#if computation.summary.qbiDeduction > 0}<span
+					>QBI deduction {formatCurrencyPrecise(computation.summary.qbiDeduction)}</span
+				>{/if}
 			<span>Income tax {formatCurrencyPrecise(computation.summary.incomeTax)}</span>
-			{#if computation.summary.selfEmploymentTax > 0}<span>Self-employment tax {formatCurrencyPrecise(computation.summary.selfEmploymentTax)}</span>{/if}
-			{#if computation.summary.refundableCredits > 0}<span>Refundable credits {formatCurrencyPrecise(computation.summary.refundableCredits)}</span>{/if}
+			{#if computation.summary.selfEmploymentTax > 0}<span
+					>Self-employment tax {formatCurrencyPrecise(computation.summary.selfEmploymentTax)}</span
+				>{/if}
+			{#if computation.summary.refundableCredits > 0}<span
+					>Refundable credits {formatCurrencyPrecise(computation.summary.refundableCredits)}</span
+				>{/if}
 			<span>Payments {formatCurrencyPrecise(computation.summary.totalPayments)}</span>
 			<span>Effective rate {computation.summary.effectiveRate}% of AGI</span>
 		</div>
@@ -142,13 +168,21 @@
 							<tr class="line-row">
 								<td>
 									<div class="line-label">
-										<span>{c.label}{#if c.businessName} <span class="business-tag"><Briefcase size={14} /> {c.businessName}</span>{/if}</span>
+										<span
+											>{c.label}{#if c.businessName}
+												<span class="business-tag"><Briefcase size={14} /> {c.businessName}</span>{/if}</span
+										>
 										<span class="line-detail">{c.detail}</span>
 									</div>
 								</td>
 								<td class="amount">{formatCurrencyPrecise(c.amount)}</td>
 								<td class="record-cell">
-									{#if recorded === c.amount}
+									{#if c.carryForward}
+										<span class="line-detail"
+											>Applies to every year until changed, so record it once the {data.year} return is filed{#if recorded !== null}
+												(now {formatCurrencyPrecise(recorded)}){/if}</span
+										>
+									{:else if recorded === c.amount}
 										<span class="recorded"><Check size={14} /> Recorded</span>
 									{:else}
 										<form method="POST" action="?/record&year={data.year}" use:enhance class="record-form">
@@ -291,11 +325,6 @@
 		border-radius: var(--radius-md);
 		background: var(--color-bg);
 		cursor: pointer;
-	}
-
-	.lede {
-		color: var(--color-text-muted);
-		margin: 0 0 var(--spacing-lg);
 	}
 
 	.summary-line {
