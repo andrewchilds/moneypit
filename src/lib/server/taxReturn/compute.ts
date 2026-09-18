@@ -3,7 +3,9 @@
  * has. Pure: everything comes in through `ReturnInput`, so it can be unit
  * tested, and every line on every form is listed with the math behind it.
  *
- * What is computed: Schedule C per business, Schedule SE, Form 8995 (the
+ * What is computed: Schedule C per business with Form 8829 (the office's
+ * share of whole-home expenses under the gross income limit, no
+ * depreciation), Schedule SE, Form 8995 (the
  * simplified QBI deduction), Schedule 1, Schedule 2 (self-employment tax,
  * additional Medicare tax, net investment income tax), Schedule 3 (an
  * extension payment), Schedules A and B, Form 8949 (one row per 1099-B
@@ -25,7 +27,7 @@ import { isShortTermBox, LONG_TERM_BOXES, ROWS_PER_PAGE, SCHEDULE_D_LINE, SHORT_
 
 export type { CapitalGainRow } from './form8949';
 
-export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f8949' | 'f6781' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8606' | 'f8995';
+export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f8829' | 'f1040sd' | 'f8949' | 'f6781' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8606' | 'f8995';
 
 export interface PayerFigure {
 	name: string;
@@ -53,12 +55,26 @@ export interface BusinessInput {
 	income: ScheduleLineFigure[];
 	expenses: ScheduleLineFigure[];
 	sepContribution: number;
+	/** The business's use of the home, for Form 8829; null when it claims none */
+	homeOffice: HomeOfficeInput | null;
+}
+
+export interface HomeOfficeInput {
+	/** Square feet used regularly and exclusively for the business (Form 8829 line 1) */
+	officeSqft: number;
+	/** Square feet of the whole home (line 2) */
+	totalSqft: number;
+	/** Whole-home expenses allocated to the office: each account's year total, all indirect (column (b) of lines 16 to 22) */
+	expenses: { account: string; amount: number }[];
+	/** Last year's Form 8829 line 43, as answered (line 25) */
+	carryoverFromLastYear: number;
 	/**
-	 * Home office operating expenses the gross income limit disallowed: last
-	 * year's, deducted this year through the worksheet, and this year's,
-	 * carried to next year (Form 8829 lines 25 and 43).
+	 * What the home office worksheet put on Schedule C line 30 through the
+	 * tax report; the form's line 36 replaces it, and a difference (the
+	 * worksheet's income limit is figured before meals are halved) is a
+	 * warning
 	 */
-	homeOfficeCarryover: { fromLastYear: number; toNextYear: number };
+	worksheetDeduction: number;
 }
 
 /** Carryovers from last year's return, as positive amounts */
@@ -416,7 +432,70 @@ const SCHEDULE_C_EXPENSE_LINES = [
 /** "Schedule C Line 27" was written before the form split line 27 in two */
 const SCHEDULE_C_LINE_ALIASES: Record<string, string> = { '27': '27b', '20': '20b', '16': '16b', '24': '24a' };
 
-function scheduleC(business: BusinessInput, warnings: string[]): FormBuilder {
+/** Form 8829 lines 16 to 22, the kinds of whole-home expense */
+const HOME_EXPENSE_LINES = [
+	['18', 'Insurance'],
+	['19', 'Rent'],
+	['20', 'Repairs and maintenance'],
+	['21', 'Utilities'],
+	['22', 'Other expenses']
+] as const;
+
+/** The Form 8829 line a whole-home expense account goes on, from its name */
+function homeExpenseLine(account: string): (typeof HOME_EXPENSE_LINES)[number][0] {
+	const p = account.toLowerCase();
+	if (/insurance/.test(p)) return '18';
+	if (/rent|lease/.test(p)) return '19';
+	if (/repair|mainten/.test(p)) return '20';
+	if (/utilit|electric|gas|water|sewer|internet|phone|heat|power|trash|garbage/.test(p)) return '21';
+	return '22';
+}
+
+/**
+ * Form 8829 for one business: the office's share of the whole-home expenses
+ * (every account allocated is an indirect expense, column (b)), plus last
+ * year's carryover, allowed up to Schedule C line 29; the rest carries to
+ * next year on line 43. Casualty losses, mortgage interest and real estate
+ * taxes (lines 9 to 11), and depreciation (Part III) are not figured.
+ */
+function form8829(business: BusinessInput, home: HomeOfficeInput, line29: number, warnings: string[]): FormBuilder {
+	const name = business.unassigned ? 'no business assigned' : (business.name ?? 'Schedule C');
+	const f = new FormBuilder('f8829', 'Form 8829', 'Expenses for Business Use of Your Home', { id: business.id, name: business.unassigned ? null : business.name });
+	const line1 = f.amount('1', 'Area used regularly and exclusively for business (square feet)', home.officeSqft, 'input');
+	const line2 = f.amount('2', 'Total area of home (square feet)', home.totalSqft, 'input');
+	const percent = line2 > 0 ? Math.min(100, round2((line1 / line2) * 100)) : 0;
+	f.text('3', 'Line 1 divided by line 2, as a percentage', `${percent}%`);
+	f.text('7', 'Business percentage', `${percent}%`);
+	const line8 = f.amount('8', 'Schedule C line 29', line29, 'input', 'No gain or loss from the business use of the home itself is assumed');
+	const line14 = f.amount('14', 'Casualty losses, mortgage interest and real estate taxes (line 12, column (a), and line 13)', 0);
+	const line15 = f.amount('15', 'Line 8 less line 14 (not below zero)', Math.max(0, line8 - line14), 'total', 'The gross income limit on operating expenses');
+	let line23 = 0;
+	for (const [line, label] of HOME_EXPENSE_LINES) {
+		const entries = home.expenses.filter((e) => homeExpenseLine(e.account) === line);
+		const amount = sum(entries.map((e) => e.amount));
+		if (amount === 0) continue;
+		f.amount(`${line}.b`, `${label}, indirect (column (b))`, amount, 'input', entries.map((e) => `${e.account} ${money(e.amount)}`).join(', '));
+		line23 = round2(line23 + amount);
+	}
+	const homeowner = home.expenses.filter((e) => /mortgage|real estate|property tax/i.test(e.account));
+	if (homeowner.length > 0) {
+		warnings.push(
+			`Form 8829 for ${name}: ${homeowner.map((e) => e.account).join(', ')} went on line 22 (other expenses); mortgage interest and real estate taxes belong on lines 10 and 11, with the business part taken off Schedule A, which is not done.`
+		);
+	}
+	f.amount('23.b', 'Add lines 16 through 22, column (b)', line23, 'total');
+	const line24 = f.amount('24', `Line 23, column (b) × ${percent}%`, line23 * (percent / 100));
+	const line25 = f.amount('25', 'Carryover of prior year operating expenses', home.carryoverFromLastYear, 'input', "Last year's Form 8829 line 43, as answered");
+	const line26 = f.amount('26', 'Line 23, column (a), line 24, and line 25', line24 + line25);
+	const line27 = f.amount('27', 'Allowable operating expenses (smaller of line 15 or line 26)', Math.min(line15, line26), 'total');
+	const line34 = f.amount('34', 'Add lines 14, 27, and 33', line14 + line27, 'computed', 'Line 33 (excess casualty losses and depreciation) is zero');
+	f.amount('36', 'Allowable expenses for business use of your home (to Schedule C line 30)', line34, 'result');
+	f.amount('43', 'Operating expenses carried over to next year (line 26 less line 27)', Math.max(0, line26 - line27), 'result');
+	warnings.push(`Form 8829 for ${name}: depreciation of the home (Part III and line 30) and casualty losses are not figured; if you own the home, add them by hand.`);
+	return f;
+}
+
+function scheduleC(business: BusinessInput, warnings: string[]): { form: FormBuilder; f8829: FormBuilder | null } {
 	const name = business.unassigned ? 'no business assigned' : (business.name ?? 'Schedule C');
 	const f = new FormBuilder('f1040sc', 'Schedule C', 'Profit or Loss From Business', { id: business.id, name: business.unassigned ? null : business.name });
 	f.text('A', 'Principal business or profession', business.description);
@@ -459,7 +538,24 @@ function scheduleC(business: BusinessInput, warnings: string[]): FormBuilder {
 	}
 	f.amount('28', 'Total expenses before business use of home', line28, 'total');
 	const line29 = f.amount('29', 'Tentative profit or loss', line7 - line28);
-	const line30 = f.amount('30', 'Expenses for business use of home', expensesOn('30').amount, 'input');
+	// Form 8829 figures line 30 from line 29; the report's figure for the
+	// category came from the home office worksheet, which the form replaces
+	const reported30 = expensesOn('30').amount;
+	let f8829: FormBuilder | null = null;
+	let line30 = reported30;
+	let detail30: string | undefined;
+	if (business.homeOffice) {
+		f8829 = form8829(business, business.homeOffice, line29, warnings);
+		const line36 = f8829.get('36');
+		line30 = round2(reported30 - business.homeOffice.worksheetDeduction + line36);
+		detail30 = 'Form 8829 line 36';
+		if (Math.abs(line36 - business.homeOffice.worksheetDeduction) > 0.005) {
+			warnings.push(
+				`${name}: Form 8829 allows ${money(line36)} for business use of the home, but the tax report's home office worksheet shows ${money(business.homeOffice.worksheetDeduction)} (its income limit is figured before meals are halved); Schedule C line 30 uses the form's figure.`
+			);
+		}
+	}
+	f.amount('30', 'Expenses for business use of home', line30, 'input', detail30);
 	const line31 = f.amount('31', 'Net profit or loss', line29 - line30, 'result');
 	if (line31 < 0) {
 		if (business.allInvestmentAtRisk === true) {
@@ -484,7 +580,7 @@ function scheduleC(business: BusinessInput, warnings: string[]): FormBuilder {
 		});
 		f.amount('48', 'Total other expenses (to line 27b)', other.amount, 'total');
 	}
-	return f;
+	return { form: f, f8829 };
 }
 
 function scheduleSE(
@@ -686,10 +782,12 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		owner === 'spouse' ? `${id.spouseFirstName} ${id.spouseLastName}`.trim() : `${id.firstName} ${id.lastName}`.trim();
 	const ownerSsn = (owner: 'taxpayer' | 'spouse') => (owner === 'spouse' ? id.spouseSsn : id.ssn);
 	const scheduleCs = input.businesses.map((b) => {
-		const form = scheduleC(b, warnings);
+		const { form, f8829 } = scheduleC(b, warnings);
 		form.text('name', 'Name of proprietor', ownerName(b.owner));
 		form.text('ssn', 'Social security number', ownerSsn(b.owner));
-		return { business: b, form };
+		f8829?.text('name', 'Name(s) of proprietor(s)', ownerName(b.owner));
+		f8829?.text('ssn', 'Your social security number', ownerSsn(b.owner));
+		return { business: b, form, f8829 };
 	});
 	const netProfitOf = (owner: 'taxpayer' | 'spouse') => sum(scheduleCs.filter((s) => s.business.owner === owner).map((s) => s.form.get('31')));
 	const totalNetProfit = sum(scheduleCs.map((s) => s.form.get('31')));
@@ -1300,8 +1398,10 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	warnings.push('Not computed: alternative minimum tax, credits other than the child tax credit and earned income credit, deductions on Schedule 1-A, the charitable contribution carryover, and depreciation.');
 
 	// Home office expenses the gross income limit disallowed, per business
-	for (const b of input.businesses) {
-		const { fromLastYear, toNextYear } = b.homeOfficeCarryover;
+	for (const { business: b, f8829 } of scheduleCs) {
+		if (!f8829 || !b.homeOffice) continue;
+		const fromLastYear = b.homeOffice.carryoverFromLastYear;
+		const toNextYear = f8829.get('43');
 		if (toNextYear <= 0 && fromLastYear <= 0) continue;
 		carryovers.push({
 			key: 'home_office_carryover',
@@ -1312,7 +1412,6 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 			detail: toNextYear > 0 ? 'Form 8829 line 43: allowable home expenses over the gross income limit of the business' : `Last year's ${money(fromLastYear)} carryover was deducted in full this year`
 		});
 	}
-
 
 	// Schedule B lists payers when there is any interest or dividend income
 	let scheduleB: FormBuilder | null = null;
@@ -1352,6 +1451,7 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	if (f8606) forms.push(f8606.form.form);
 	if (f8995) forms.push(f8995.form);
 	if (f6781) forms.push(f6781.form);
+	for (const { f8829 } of scheduleCs) if (f8829) forms.push(f8829.form);
 
 	return {
 		year: input.year,

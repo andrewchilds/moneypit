@@ -361,11 +361,15 @@ are the per-business answers `home_office`, `home_office_sqft`,
 `home_total_sqft`, and `home_office_accounts`, a question of type `accounts`
 listing the whole-home expense accounts (rent, utilities, insurance) to
 allocate; the prep page renders it as a multi-select of EXPENSE accounts and
-`fact:set home_office_accounts <id,id,...> --business <b>` takes ids. Each
-account's year total (the same figure as on the report) is multiplied by
-office ÷ total square footage. The sum is limited to the business's reported
-income less its other Schedule C expenses (Form 8829's gross income limit);
-the remainder is shown as a carryover. Depreciation is not computed.
+`fact:set home_office_accounts <id,id,...> --business <b>` takes ids. The
+accounts' year totals (the same figures as on the report) are summed and
+multiplied by office ÷ total square footage as a percentage rounded to two
+decimals, the figure Form 8829 line 7 prints (each allocation row also shows
+its own share, and carries the account's whole total as `base`). The sum is
+limited to the business's reported income less its other Schedule C
+expenses (Form 8829's gross income limit); the remainder is shown as a
+carryover. Depreciation is not computed. The draft return refigures the
+same math as a Form 8829 per business (below).
 
 The same module has the shared expenses worksheet (Schedule C Line 25):
 personal expense accounts attached to the business (phone, internet) whose
@@ -389,7 +393,7 @@ of one account that add up to more than 100% across businesses are flagged.
 `src/lib/server/taxReturn/compute.ts` turns the report's figures into a
 draft Form 1040 with its schedules: Schedule C per business (with Part V
 listing the categories behind line 27b and cost of goods sold on line 4),
-Schedule SE per owner, Form 8995 (simplified QBI, with the loss carryforward
+Form 8829 per business with a home office (below), Schedule SE per owner, Form 8995 (simplified QBI, with the loss carryforward
 on line 16), Schedules 1, 2, 3, A and B, Form 8949 with Schedule D and
 Form 6781 (below), Form 8606 Part III (below), Schedule 8812 (child tax credit
 and the refundable additional child tax credit) and Schedule EIC with the
@@ -428,6 +432,26 @@ math, and `warnings` list what the computation could not do (AMT, credits
 other than the child tax credit and EIC, Schedule 1-A deductions, the
 charitable carryover, Form 8995-A above the QBI threshold, a state refund on
 a 1099-G).
+
+Form 8829 is produced for each business whose home office worksheet ran
+(`homeOffice` on `BusinessInput`: the square footages, each allocated
+account's whole year total from the worksheet's allocation rows, last
+year's carryover answer, and the worksheet's own deduction). Line 8 is
+Schedule C line 29; every allocated account is an indirect expense in
+column (b), sorted onto lines 18 to 22 by the account name (insurance,
+rent or lease, repairs, utilities and the like, else other expenses; a
+mortgage interest or real estate tax account lands on line 22 with a
+warning, since lines 10 and 11 and the Schedule A split are not done);
+line 24 is line 23 times the percentage on line 7; line 25 is last year's
+carryover; line 27 is the smaller of line 15 and line 26; line 36 is what
+Schedule C line 30 uses, and line 43 is next year's carryover (the
+`home_office_carryover` entry in `carryovers`). Casualty losses and
+depreciation (Part III) are not figured, with a warning. When line 36
+differs from the worksheet's figure (the worksheet's income limit is taken
+before meals are halved), Schedule C line 30 uses the form's figure with
+a warning. The 2025 f8829 field map marks lines 3 and 7 as `percent`
+(text lines whose % sign is pre-printed). The forms go last in the PDF,
+per the attachment sequence.
 
 A 1099-B is entered per Form 8949 box (A and B short-term, D and E
 long-term; A and D are sales whose basis the broker reported to the IRS).

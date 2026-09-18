@@ -8,6 +8,7 @@ import {
 	type ReturnInput,
 	type BusinessInput,
 	type DependentInput,
+	type HomeOfficeInput,
 	type CapitalGainRow
 } from '$lib/server/taxReturn/compute';
 import { getTaxYearConstants } from '$lib/server/taxReturn/constants';
@@ -32,7 +33,7 @@ function business(overrides: Partial<BusinessInput> = {}): BusinessInput {
 			{ line: '17', category: 'Legal & Professional', amount: 5000 }
 		],
 		sepContribution: 0,
-		homeOfficeCarryover: { fromLastYear: 0, toNextYear: 0 },
+		homeOffice: null,
 		...overrides
 	};
 }
@@ -91,6 +92,21 @@ const checks = (result: ReturnType<typeof computeReturn>, formId: string) => res
 
 function dependent(overrides: Partial<DependentInput> = {}): DependentInput {
 	return { firstName: 'Byron', lastName: 'Lovelace', ssn: '987-65-4321', relationship: 'Son', birthYear: 2014, monthsLived: 12, status: 'none', ...overrides };
+}
+
+/** A 200 of 1,300 square foot office (15.38%) over 25,300 of rent and electricity: 3,891.14 */
+function homeOffice(overrides: Partial<HomeOfficeInput> = {}): HomeOfficeInput {
+	return {
+		officeSqft: 200,
+		totalSqft: 1300,
+		expenses: [
+			{ account: 'Rent:Apt', amount: 24000 },
+			{ account: 'Utilities:Electric', amount: 1300 }
+		],
+		carryoverFromLastYear: 0,
+		worksheetDeduction: 3891.14,
+		...overrides
+	};
 }
 
 describe('bracketTax', () => {
@@ -688,21 +704,189 @@ describe('carryovers', () => {
 		expect(r.warnings.some((w) => w.includes('80% of taxable income'))).toBe(true);
 	});
 
-	it('reports each business’s home office carryover', () => {
+	it('reports each business’s home office carryover from its Form 8829 line 43', () => {
 		const r = computeReturn(
 			input({
 				businesses: [
-					business({ id: 'b1', name: 'Consulting', homeOfficeCarryover: { fromLastYear: 0, toNextYear: 1392.31 } }),
-					business({ id: 'b2', name: 'Design', homeOfficeCarryover: { fromLastYear: 300, toNextYear: 0 } }),
-					business({ id: 'b3', name: 'Shop', homeOfficeCarryover: { fromLastYear: 0, toNextYear: 0 } })
+					// Line 29 is 2,500 against 3,891.14 of home expenses
+					business({ id: 'b1', name: 'Consulting', income: [{ line: '1', category: 'Gross Receipts', amount: 4000 }], expenses: [{ line: '18', category: 'Office Expense', amount: 1500 }], homeOffice: homeOffice() }),
+					business({ id: 'b2', name: 'Design', homeOffice: homeOffice({ carryoverFromLastYear: 300 }) }),
+					business({ id: 'b3', name: 'Shop' })
 				]
 			}),
 			c2025
 		);
-		expect(carryover(r, 'home_office_carryover', 'b1')?.amount).toBe(1392.31);
+		expect(carryover(r, 'home_office_carryover', 'b1')?.amount).toBe(1391.14);
 		expect(carryover(r, 'home_office_carryover', 'b2')?.amount).toBe(0);
 		expect(carryover(r, 'home_office_carryover', 'b2')?.detail).toContain('300.00');
 		expect(carryover(r, 'home_office_carryover', 'b3')).toBeUndefined();
+	});
+});
+
+describe('Form 8829', () => {
+	it('reproduces the 2024 filed form: 200 of 1,500 square feet against 51,632 of indirect expenses', () => {
+		const r = computeReturn(
+			input({
+				businesses: [
+					business({
+						expenses: [...business().expenses, { line: '30', category: 'Home Office', amount: 6882.55 }],
+						homeOffice: homeOffice({ officeSqft: 200, totalSqft: 1500, expenses: [{ account: 'Rent:Apt', amount: 51632 }], worksheetDeduction: 6882.55 })
+					})
+				]
+			}),
+			c2024
+		);
+		expect(text(r, 'f8829', '3')).toBe('13.33%');
+		expect(text(r, 'f8829', '7')).toBe('13.33%');
+		expect(line(r, 'f8829', '8')).toBe(80000);
+		expect(line(r, 'f8829', '19.b')).toBe(51632);
+		expect(line(r, 'f8829', '23.b')).toBe(51632);
+		expect(line(r, 'f8829', '24')).toBe(6882.55);
+		expect(line(r, 'f8829', '27')).toBe(6882.55);
+		expect(line(r, 'f8829', '36')).toBe(6882.55);
+		expect(formatFormAmount(line(r, 'f8829', '36')!)).toBe('6,883');
+		expect(line(r, 'f8829', '43')).toBe(0);
+		expect(line(r, 'f1040sc', '30')).toBe(6882.55);
+		expect(line(r, 'f1040sc', '31')).toBe(73117.45);
+		expect(r.warnings.some((w) => w.includes('home office worksheet shows'))).toBe(false);
+		expect(r.warnings.some((w) => w.startsWith('Form 8829 for Consulting: depreciation'))).toBe(true);
+	});
+
+	it('limits the operating expenses to Schedule C line 29 and carries the rest to line 43', () => {
+		const r = computeReturn(
+			input({
+				businesses: [
+					business({
+						income: [{ line: '1', category: 'Gross Receipts', amount: 4000 }],
+						expenses: [
+							{ line: '18', category: 'Office Expense', amount: 1500 },
+							{ line: '30', category: 'Home Office', amount: 2500 }
+						],
+						homeOffice: homeOffice({ worksheetDeduction: 2500 })
+					})
+				]
+			}),
+			c2025
+		);
+		expect(line(r, 'f8829', '8')).toBe(2500);
+		expect(line(r, 'f8829', '15')).toBe(2500);
+		expect(line(r, 'f8829', '24')).toBe(3891.14);
+		expect(line(r, 'f8829', '26')).toBe(3891.14);
+		expect(line(r, 'f8829', '27')).toBe(2500);
+		expect(line(r, 'f8829', '36')).toBe(2500);
+		expect(line(r, 'f8829', '43')).toBe(1391.14);
+		expect(line(r, 'f1040sc', '30')).toBe(2500);
+		expect(line(r, 'f1040sc', '31')).toBe(0);
+	});
+
+	it('deducts last year’s carryover on line 25 under the same limit', () => {
+		const r = computeReturn(
+			input({
+				businesses: [
+					business({
+						expenses: [...business().expenses, { line: '30', category: 'Home Office', amount: 5283.45 }],
+						homeOffice: homeOffice({ carryoverFromLastYear: 1392.31, worksheetDeduction: 5283.45 })
+					})
+				]
+			}),
+			c2025
+		);
+		expect(line(r, 'f8829', '25')).toBe(1392.31);
+		expect(line(r, 'f8829', '26')).toBe(5283.45);
+		expect(line(r, 'f8829', '36')).toBe(5283.45);
+		expect(line(r, 'f8829', '43')).toBe(0);
+		expect(line(r, 'f1040sc', '30')).toBe(5283.45);
+		expect(line(r, 'f1040sc', '31')).toBe(74716.55);
+	});
+
+	it('allows nothing when line 29 is a loss but still files the form for the carryover', () => {
+		const r = computeReturn(
+			input({ businesses: [business({ income: [{ line: '1', category: 'Gross Receipts', amount: 500 }], homeOffice: homeOffice({ worksheetDeduction: 0 }) })] }),
+			c2025
+		);
+		expect(line(r, 'f8829', '8')).toBe(-19500);
+		expect(line(r, 'f8829', '15')).toBe(0);
+		expect(line(r, 'f8829', '36')).toBe(0);
+		expect(line(r, 'f8829', '43')).toBe(3891.14);
+		expect(line(r, 'f1040sc', '30')).toBe(0);
+	});
+
+	it('sorts the accounts onto lines 18 to 22 by name and warns about mortgage interest', () => {
+		const r = computeReturn(
+			input({
+				businesses: [
+					business({
+						homeOffice: homeOffice({
+							expenses: [
+								{ account: 'Insurance:Renters', amount: 276 },
+								{ account: 'Rent:Apt', amount: 50400 },
+								{ account: 'Home:Repairs', amount: 800 },
+								{ account: 'Utilities:Gas (NY)', amount: 83.16 },
+								{ account: 'Utilities:Electric', amount: 556.17 },
+								{ account: 'HOA Dues', amount: 1200 },
+								{ account: 'Mortgage:Interest', amount: 9000 }
+							],
+							worksheetDeduction: 9573.33
+						})
+					})
+				]
+			}),
+			c2025
+		);
+		expect(line(r, 'f8829', '18.b')).toBe(276);
+		expect(line(r, 'f8829', '19.b')).toBe(50400);
+		expect(line(r, 'f8829', '20.b')).toBe(800);
+		expect(line(r, 'f8829', '21.b')).toBe(639.33);
+		expect(line(r, 'f8829', '22.b')).toBe(10200);
+		expect(line(r, 'f8829', '23.b')).toBe(62315.33);
+		// 15.38% of 62,315.33
+		expect(line(r, 'f8829', '24')).toBe(9584.1);
+		expect(r.warnings.some((w) => w.includes('Mortgage:Interest went on line 22'))).toBe(true);
+		expect(r.warnings.some((w) => w.includes('home office worksheet shows 9,573.33'))).toBe(true);
+	});
+
+	it('puts the form’s figure on Schedule C line 30 when it differs from the worksheet’s, with a warning', () => {
+		// The worksheet's income limit did not halve meals: 4,000 less 3,000 recorded gives 1,000, but line 29 is 2,500
+		const r = computeReturn(
+			input({
+				businesses: [
+					business({
+						income: [{ line: '1', category: 'Gross Receipts', amount: 4000 }],
+						expenses: [
+							{ line: '24b', category: 'Meals (50%)', amount: 3000 },
+							{ line: '30', category: 'Home Office', amount: 1000 }
+						],
+						homeOffice: homeOffice({ worksheetDeduction: 1000 })
+					})
+				]
+			}),
+			c2025
+		);
+		expect(line(r, 'f1040sc', '29')).toBe(2500);
+		expect(line(r, 'f8829', '36')).toBe(2500);
+		expect(line(r, 'f1040sc', '30')).toBe(2500);
+		expect(line(r, 'f1040sc', '31')).toBe(0);
+		expect(r.warnings.some((w) => w.includes('Form 8829 allows 2,500.00') && w.includes('worksheet shows 1,000.00'))).toBe(true);
+	});
+
+	it('files one Form 8829 per business with an office, after the other forms, in the owner’s name', () => {
+		const r = computeReturn(
+			input({
+				filingStatus: 'mfj',
+				identity: { ...input().identity, spouseFirstName: 'Charles', spouseLastName: 'Babbage', spouseSsn: '111-22-3333' },
+				businesses: [
+					business({ id: 'b1', name: 'Consulting', homeOffice: homeOffice() }),
+					business({ id: 'b2', name: 'Design', owner: 'spouse', homeOffice: homeOffice({ officeSqft: 100 }) }),
+					business({ id: 'b3', name: 'Shop' })
+				]
+			}),
+			c2025
+		);
+		const forms = r.forms.filter((f) => f.id === 'f8829');
+		expect(forms.map((f) => f.businessId)).toEqual(['b1', 'b2']);
+		expect(forms.map((f) => f.lines.find((l) => l.line === 'name')?.text)).toEqual(['Ada Lovelace', 'Charles Babbage']);
+		expect(forms[1].lines.find((l) => l.line === '3')?.text).toBe('7.69%');
+		expect(r.forms.findIndex((f) => f.id === 'f8829')).toBe(r.forms.length - 2);
 	});
 });
 

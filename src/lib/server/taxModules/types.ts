@@ -87,6 +87,8 @@ export interface WorksheetBreakdownRow {
 	 */
 	accountId?: string;
 	share?: number;
+	/** On an allocation row, the account's whole year total the share is taken of */
+	base?: number;
 }
 
 export interface WorksheetResult {

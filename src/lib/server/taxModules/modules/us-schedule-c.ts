@@ -28,28 +28,35 @@ export const homeOfficeWorksheet: TaxWorksheet = {
 		const total = asNumber(facts.home_total_sqft);
 		if (office === null || total === null || office <= 0 || total <= 0) return null;
 
-		const ratio = Math.min(1, office / total);
+		// The percentage as Form 8829 line 7 prints it, two decimals, so the
+		// worksheet and the form agree
+		const percent = Math.min(100, round2((office / total) * 100));
+		const ratio = percent / 100;
 		const breakdown: WorksheetBreakdownRow[] = [
 			{ label: 'Office square footage', amount: office, kind: 'input' },
 			{ label: 'Total home square footage', amount: total, kind: 'input' },
-			{ label: 'Business use percentage', detail: `${office} ÷ ${total}`, amount: round2(ratio * 100), kind: 'input' }
+			{ label: 'Business use percentage', detail: `${office} ÷ ${total}`, amount: percent, kind: 'input' }
 		];
 
-		let allowable = 0;
+		// Every account is an indirect expense of the whole home; the form
+		// multiplies their sum (line 23, column (b)) by the percentage once
+		let indirect = 0;
 		for (const id of asAccountIds(facts.home_office_accounts)) {
 			const account = accounts.find((a) => a.id === id);
 			if (!account) continue;
-			const allocated = round2(account.total * ratio);
-			allowable = round2(allowable + allocated);
+			indirect = round2(indirect + account.total);
 			breakdown.push({
 				label: account.path,
-				detail: `${round2(ratio * 100)}% of ${account.total.toFixed(2)}`,
-				amount: allocated,
+				detail: `${percent}% of ${account.total.toFixed(2)}`,
+				amount: round2(account.total * ratio),
 				kind: 'allocation',
 				accountId: account.id,
-				share: ratio
+				share: ratio,
+				base: account.total
 			});
 		}
+		let allowable = round2(indirect * ratio);
+		breakdown.push({ label: 'Office share of home expenses', detail: `${percent}% of ${indirect.toFixed(2)}, Form 8829 line 24`, amount: allowable, kind: 'subtotal' });
 		// Last year's disallowed operating expenses (Form 8829 line 25) are
 		// deductible this year under the same limit
 		const priorCarryover = Math.max(0, asNumber(facts.home_office_carryover) ?? 0);
@@ -57,7 +64,7 @@ export const homeOfficeWorksheet: TaxWorksheet = {
 			breakdown.push({ label: 'Operating expenses carried over from last year', detail: 'Form 8829 line 25', amount: priorCarryover, kind: 'input' });
 			allowable = round2(allowable + priorCarryover);
 		}
-		breakdown.push({ label: 'Allowable home expenses', amount: allowable, kind: 'subtotal' });
+		breakdown.push({ label: 'Allowable home expenses', detail: 'Form 8829 line 26', amount: allowable, kind: 'subtotal' });
 
 		const limit = Math.max(0, round2(section.income - section.expenses));
 		breakdown.push({

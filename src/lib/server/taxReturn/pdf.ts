@@ -22,6 +22,8 @@ interface FormFieldMap {
 	checks: Record<string, string>;
 	/** Lines whose parentheses are pre-printed on the form, so a loss prints without its own */
 	parenthesized?: string[];
+	/** Text lines holding a percentage whose sign is pre-printed on the form */
+	percent?: string[];
 	/** Further fields that take a line's value as well (the name repeated on page 2) */
 	repeat?: Record<string, string[]>;
 }
@@ -350,6 +352,36 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 		},
 		checks: { 'method:cash': 'c1_1[0]', 'method:accrual': 'c1_1[1]', 'materially-participated': 'c1_2[0]', '32a': 'c1_7[0]', '32b': 'c1_7[1]' }
 	},
+	f8829: {
+		file: 'f8829.pdf',
+		// Lines 9 to 12 and 16 to 23 have two columns, (a) direct and (b) indirect; the 2025 form has 58 fields in reading order
+		fields: {
+			name: 'f1_01[0]',
+			ssn: 'f1_02[0]',
+			'1': 'f1_03[0]',
+			'2': 'f1_04[0]',
+			'3': 'f1_05[0]',
+			'7': 'f1_09[0]',
+			'8': 'f1_10[0]',
+			'14': 'f1_20[0]',
+			'15': 'f1_21[0]',
+			'18.b': 'f1_27[0]',
+			'19.b': 'f1_29[0]',
+			'20.b': 'f1_31[0]',
+			'21.b': 'f1_33[0]',
+			'22.b': 'f1_35[0]',
+			'23.b': 'f1_37[0]',
+			'24': 'f1_38[0]',
+			'25': 'f1_39[0]',
+			'26': 'f1_40[0]',
+			'27': 'f1_41[0]',
+			'34': 'f1_48[0]',
+			'36': 'f1_50[0]',
+			'43': 'f1_57[0]'
+		},
+		checks: {},
+		percent: ['3', '7']
+	},
 	f1040sd: {
 		file: 'f1040sd.pdf',
 		fields: scheduleDFields(),
@@ -541,7 +573,8 @@ async function fillForm(form: ReturnForm, map: FormFieldMap, year: number): Prom
 		const suffix = map.fields[line.line];
 		if (!suffix) continue;
 		const amount = map.parenthesized?.includes(line.line) ? Math.abs(line.amount ?? 0) : (line.amount ?? 0);
-		const value = line.kind === 'text' ? (line.text ?? '') : formatFormAmount(amount);
+		const text = map.percent?.includes(line.line) ? (line.text ?? '').replace(/%$/, '') : (line.text ?? '');
+		const value = line.kind === 'text' ? text : formatFormAmount(amount);
 		if (Array.isArray(suffix)) {
 			// One character per field, as a year of birth is entered
 			const chars = value.replace(/[^A-Za-z0-9]/g, '');

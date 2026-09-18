@@ -213,7 +213,7 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 				.filter((f) => f.line !== '' && f.amount !== 0);
 		const method = asText(answers.get('accounting_method'));
 		const allInvestmentAtRisk = answers.get('all_investment_at_risk');
-		// The home office worksheet already deducted last year's carryover and figured this year's
+		// The home office worksheet ran when the business claims an office; Form 8829 refigures its result from Schedule C line 29
 		const homeOffice = report.worksheets.find((w) => w.worksheetId === 'home-office' && w.businessId === section.businessId);
 		return {
 			id: section.businessId,
@@ -227,10 +227,15 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 			income: figures(section.incomeCategories),
 			expenses: figures(section.expenseCategories),
 			sepContribution: asNumber(answers.get('sep_contribution')),
-			homeOfficeCarryover: {
-				fromLastYear: asNumber(answers.get('home_office_carryover')),
-				toNextYear: homeOffice?.breakdown.find((r) => r.kind === 'carryover')?.amount ?? 0
-			}
+			homeOffice: homeOffice
+				? {
+						officeSqft: asNumber(homeOffice.facts.home_office_sqft),
+						totalSqft: asNumber(homeOffice.facts.home_total_sqft),
+						expenses: homeOffice.breakdown.filter((r) => r.kind === 'allocation').map((r) => ({ account: r.label, amount: r.base ?? 0 })),
+						carryoverFromLastYear: asNumber(answers.get('home_office_carryover')),
+						worksheetDeduction: homeOffice.lines.find((l) => l.category === 'Home Office')?.amount ?? 0
+					}
+				: null
 		};
 	});
 
