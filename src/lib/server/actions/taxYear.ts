@@ -38,11 +38,23 @@ export type ReconciliationStatus = 'matched' | 'variance' | 'no_transactions';
  * for its account and category against the transactions of that account
  * in that category.
  */
-export interface DocumentReconciliation {
-	documentId: string;
+/** A box of a document that lands on the reconciled category */
+export interface ReconciledLine {
 	lineId: string;
 	box: string;
 	label: string;
+	amount: number;
+}
+
+/**
+ * One received document's boxes on one tax category against the books of the
+ * account it is tied to. Boxes sharing a category (a 1099-INT's box 1 and
+ * box 3 both land on interest income) are summed, since the tax report adds
+ * them the same way.
+ */
+export interface DocumentReconciliation {
+	documentId: string;
+	lines: ReconciledLine[];
 	taxCategoryId: string;
 	taxCategoryName: string;
 	accountId: string;
@@ -204,10 +216,10 @@ export async function getTaxYearStatus(bookId: string, year: number): Promise<Ta
 
 /**
  * Compare each received document with the books. A document tied to an
- * account gets a reconciliation per mapped line: the transactions of that
- * account in the line's category against the figure. A document tied to no
- * account is listed as untied, with the whole-category book activity each of
- * its mapped lines replaces.
+ * account gets a reconciliation per category its lines land on: the
+ * transactions of that account in the category against the lines summed. A
+ * document tied to no account is listed as untied, with the whole-category
+ * book activity each of its mapped lines replaces.
  */
 export async function compareDocuments(bookId: string, year: number): Promise<{ reconciliations: DocumentReconciliation[]; untied: UntiedDocument[] }> {
 	const [documents, totals, accounts] = await Promise.all([
@@ -272,26 +284,33 @@ export async function compareDocuments(bookId: string, year: number): Promise<{ 
 			untied.push({ documentId: doc.id, categories: Array.from(categories.values()).filter((c) => c.documentAmount !== 0 || c.bookTotal !== 0) });
 			continue;
 		}
+		const byCategory = new Map<string, DocumentReconciliation>();
 		for (const line of doc.lines) {
 			if (!line.taxCategory) continue;
-			const book = bookFigureForAccount(rowsByCategory.get(line.taxCategory.id) ?? [], doc.account.id);
-			const documentAmount = Number(line.amount);
-			const difference = round2(documentAmount - book.amount);
-			reconciliations.push({
-				documentId: doc.id,
-				lineId: line.id,
-				box: line.box,
-				label: line.label,
-				taxCategoryId: line.taxCategory.id,
-				taxCategoryName: line.taxCategory.name,
-				accountId: doc.account.id,
-				accountPath: doc.account.path,
-				bookAmount: book.amount,
-				documentAmount,
-				difference,
-				status: !book.hasRows ? 'no_transactions' : Math.abs(difference) < 0.01 ? 'matched' : 'variance'
-			});
+			let entry = byCategory.get(line.taxCategory.id);
+			if (!entry) {
+				const book = bookFigureForAccount(rowsByCategory.get(line.taxCategory.id) ?? [], doc.account.id);
+				entry = {
+					documentId: doc.id,
+					lines: [],
+					taxCategoryId: line.taxCategory.id,
+					taxCategoryName: line.taxCategory.name,
+					accountId: doc.account.id,
+					accountPath: doc.account.path,
+					bookAmount: book.amount,
+					documentAmount: 0,
+					difference: 0,
+					status: book.hasRows ? 'variance' : 'no_transactions'
+				};
+				byCategory.set(line.taxCategory.id, entry);
+			}
+			const amount = Number(line.amount);
+			entry.lines.push({ lineId: line.id, box: line.box, label: line.label, amount });
+			entry.documentAmount = round2(entry.documentAmount + amount);
+			entry.difference = round2(entry.documentAmount - entry.bookAmount);
+			if (entry.status !== 'no_transactions') entry.status = Math.abs(entry.difference) < 0.01 ? 'matched' : 'variance';
 		}
+		reconciliations.push(...byCategory.values());
 	}
 	return { reconciliations, untied };
 }

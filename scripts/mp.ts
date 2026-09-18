@@ -795,7 +795,7 @@ async function main() {
 					for (const r of status.reconciliations.filter((r) => r.documentId === doc.id)) {
 						const label = r.status === "matched" ? "matched " : r.status === "variance" ? "VARIANCE" : "NO TXNS ";
 						console.log(
-							`      ${label}  box ${r.box.padEnd(4)} ${r.taxCategoryName.padEnd(30)} ${r.accountPath.padEnd(24)} books ${money(r.bookAmount).padStart(11)}  doc ${money(r.documentAmount).padStart(11)}  diff ${money(r.difference).padStart(11)}`
+							`      ${label}  box ${r.lines.map((l) => l.box).join("+").padEnd(4)} ${r.taxCategoryName.padEnd(30)} ${r.accountPath.padEnd(24)} books ${money(r.bookAmount).padStart(11)}  doc ${money(r.documentAmount).padStart(11)}  diff ${money(r.difference).padStart(11)}`
 						);
 					}
 					const untied = status.untied.find((u) => u.documentId === doc.id);

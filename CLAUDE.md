@@ -276,9 +276,11 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   total less what documents replaced plus the document figures; expanding the
   category shows the replaced amount as its own row when it is partial.
   On `/tax/<year>` and in `tax:status`, each received document tied to an
-  account gets a reconciliation line per mapped box: the book figure for that
-  account and category, the document figure, the difference, and a status of
-  matched (within $0.01), variance, or no transactions.
+  account gets a reconciliation line per tax category its mapped boxes land
+  on (boxes sharing a category are summed, as the report sums them: a
+  1099-INT's box 1 and box 3 make one Interest Income line): the book figure
+  for that account and category, the document figure, the difference, and a
+  status of matched (within $0.01), variance, or no transactions.
   The form itself (PDF or image) can be attached to a document
   (`doc:attach`, or the drop area when adding one on `/tax/<year>`). It is
   stored in the database (`TaxDocumentFile`, a book-level record), so

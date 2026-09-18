@@ -237,10 +237,11 @@
 		return String(q.answer);
 	}
 
-	// Each mapped box of a document tied to an account is compared with the books.
-	// The amount shows an icon for the outcome; clicking it opens the comparison.
+	// The mapped boxes of a document tied to an account are compared with the
+	// books per category (boxes sharing one are summed). Each box's amount shows
+	// an icon for the outcome; clicking it opens the comparison.
 	type Reconciliation = PageData["status"]["reconciliations"][number];
-	const reconciliationOf = (lineId: string) => data.status.reconciliations.find((r) => r.lineId === lineId);
+	const reconciliationOf = (lineId: string) => data.status.reconciliations.find((r) => r.lines.some((l) => l.lineId === lineId));
 	const untiedOf = (docId: string) => data.status.untied.find((u) => u.documentId === docId);
 	const listPaths = (paths: string[]) => (paths.length <= 3 ? paths.join(", ") : `${paths.slice(0, 3).join(", ")} and ${paths.length - 3} more`);
 	type Untied = PageData["status"]["untied"][number];
@@ -922,8 +923,10 @@
 		<div class="reconcile-detail">
 			<p class="reconcile-status status-{r.status}"><Icon size={16} /> {reconciliationLabel[r.status]}</p>
 			<dl class="reconcile-figures">
-				<dt>Box {r.box}</dt>
-				<dd>{r.label}</dd>
+				{#each r.lines as l (l.lineId)}
+					<dt>Box {l.box}</dt>
+					<dd>{l.label}{#if r.lines.length > 1}<span class="mono muted"> · {formatCurrency(l.amount)}</span>{/if}</dd>
+				{/each}
 				<dt>Tax category</dt>
 				<dd>{r.taxCategoryName}</dd>
 				<dt>Account</dt>
@@ -931,7 +934,7 @@
 				<dt>Books</dt>
 				<dd class="mono replaced" title="The document figure takes precedence on the tax report">{formatCurrency(r.bookAmount)}</dd>
 				<dt>Document</dt>
-				<dd class="mono"><strong>{formatCurrency(r.documentAmount)}</strong></dd>
+				<dd class="mono"><strong>{formatCurrency(r.documentAmount)}</strong>{#if r.lines.length > 1}<span class="muted"> (the boxes above added up)</span>{/if}</dd>
 				<dt>Difference</dt>
 				<dd class="mono">{formatCurrency(r.difference)}</dd>
 			</dl>
