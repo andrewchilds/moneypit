@@ -21,6 +21,7 @@ function business(overrides: Partial<BusinessInput> = {}): BusinessInput {
 	return {
 		id: 'b1',
 		name: 'Consulting',
+		nameOnReturn: true,
 		unassigned: false,
 		owner: 'taxpayer',
 		description: 'Software consulting',
@@ -171,6 +172,14 @@ describe('computeReturn', () => {
 		expect(r.forms.map((f) => f.id)).toEqual(['f1040', 'f1040s1', 'f1040s2', 'f1040sc', 'f1040sse', 'f8995']);
 		expect(r.forms.find((f) => f.id === 'f1040')!.checks).toContain('status:single');
 		expect(r.forms.find((f) => f.id === 'f1040sc')!.checks).toContain('method:cash');
+	});
+
+	it('leaves Schedule C line C blank when the name only identifies the business in the app', () => {
+		const scheduleC = (b: BusinessInput) => computeReturn(input({ businesses: [b] }), c2025).forms.find((f) => f.id === 'f1040sc')!;
+		expect(scheduleC(business()).lines.find((l) => l.line === 'C')?.text).toBe('Consulting');
+		const unnamed = scheduleC(business({ nameOnReturn: false }));
+		expect(unnamed.lines.find((l) => l.line === 'C')).toBeUndefined();
+		expect(unnamed.businessName).toBe('Consulting');
 	});
 
 	it('halves meals and maps old line 27 to 27b', () => {

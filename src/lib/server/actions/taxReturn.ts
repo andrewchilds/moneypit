@@ -218,6 +218,7 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 		return {
 			id: section.businessId,
 			name: section.businessName,
+			nameOnReturn: answers.get('business_name_on_return') !== false,
 			unassigned: section.unassigned,
 			owner: asText(answers.get('business_owner')) === 'spouse' ? 'spouse' : 'taxpayer',
 			description: asText(answers.get('business_description')),

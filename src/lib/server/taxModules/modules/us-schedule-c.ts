@@ -182,6 +182,14 @@ export const usScheduleC: TaxModule = {
 			carryForward: true
 		},
 		{
+			key: 'business_name_on_return',
+			prompt: 'Is the name here the business name for Schedule C Line C?',
+			type: 'boolean',
+			carryForward: true,
+			description:
+				'No when the name only identifies the business in the app and there is no separate business name; the line is then left blank as the instructions direct.'
+		},
+		{
 			key: 'accounting_method',
 			prompt: 'Accounting method',
 			type: 'choice',

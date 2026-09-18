@@ -426,7 +426,10 @@ line), wages and withholding from W-2 and 1099 document boxes, 1099-R and
 (filing status, dependents, `qualifying_children`, `age_65_or_blind`,
 estimated and extension payments, the name and address questions, per
 business `business_owner`, `accounting_method` and `sep_contribution`) fill
-the rest. Meals on Schedule C line 24b are halved; a category on
+the rest. A business's name goes on Schedule C line C unless its
+carry-forward `business_name_on_return` answer is no (the name only
+identifies the business in the app), in which case the line is left blank
+as the instructions direct; the name still labels the forms. Meals on Schedule C line 24b are halved; a category on
 "Schedule C Line 27" lands on 27b. Every line carries a `detail` with its
 math, and `warnings` list what the computation could not do (AMT, credits
 other than the child tax credit and EIC, Schedule 1-A deductions, the

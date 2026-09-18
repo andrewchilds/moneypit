@@ -44,6 +44,8 @@ export interface ScheduleLineFigure {
 export interface BusinessInput {
 	id: string | null;
 	name: string | null;
+	/** Whether the name is the business name for Schedule C line C; false when it only identifies the business in the app, and the line is left blank */
+	nameOnReturn: boolean;
 	/** Accounts with Schedule C categories but no business */
 	unassigned: boolean;
 	owner: 'taxpayer' | 'spouse';
@@ -500,7 +502,7 @@ function scheduleC(business: BusinessInput, warnings: string[]): { form: FormBui
 	const f = new FormBuilder('f1040sc', 'Schedule C', 'Profit or Loss From Business', { id: business.id, name: business.unassigned ? null : business.name });
 	f.text('A', 'Principal business or profession', business.description);
 	f.text('B', 'Principal business code', business.code);
-	f.text('C', 'Business name', business.unassigned ? '' : (business.name ?? ''));
+	f.text('C', 'Business name', business.unassigned || !business.nameOnReturn ? '' : (business.name ?? ''));
 	if (business.accountingMethod) f.check(`method:${business.accountingMethod}`);
 	f.check('materially-participated');
 
