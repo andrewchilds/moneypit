@@ -1,11 +1,17 @@
 <script lang="ts">
-	import { ChevronRight, ChevronDown, AlertTriangle, ArrowRight, Download, Briefcase, FileText, DollarSign, Receipt, Info } from "lucide-svelte";
+	import { ChevronRight, ChevronDown, AlertTriangle, ArrowRight, Check, Download, Briefcase, FileText, DollarSign, Receipt, Info } from "lucide-svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
+	import Button from "$lib/components/ui/Button.svelte";
+	import { enhance } from "$app/forms";
 	import { goto } from "$app/navigation";
-	import type { PageData } from "./$types";
+	import type { ActionData, PageData } from "./$types";
 
-	let { data }: { data: PageData } = $props();
+	let { data, form }: { data: PageData; form: ActionData } = $props();
+
+	type Carryover = Computation["carryovers"][number];
+	// Next year's answer for a carryover: null when unset
+	const recordedFor = (c: Carryover): number | null => data.recorded[`${c.key}|${c.businessId ?? ""}`] ?? null;
 
 	type Computation = Extract<PageData["result"], { available: true }>["computation"];
 	type Form = Computation["forms"][number];
@@ -116,26 +122,48 @@
 			<section class="report-section carryover-section">
 				<h2><ArrowRight size={18} /> Carryovers to {data.year + 1}</h2>
 				<p class="section-note">
-					Next year's return starts from these. Record each as the answer shown on the {data.year + 1} tax prep page, or with the command.
+					Next year's return starts from these. Recording one answers the question on the
+					<a href="/tax/{data.year + 1}">{data.year + 1} tax prep page</a>.
 				</p>
+				{#if form?.error}
+					<p class="form-error">{form.error}</p>
+				{/if}
 				<table class="tax-table">
 					<thead>
 						<tr>
 							<th>Item</th>
 							<th class="amount">Amount</th>
+							<th class="record-cell">{data.year + 1} answer</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each computation.carryovers as c (c.key + (c.businessId ?? ""))}
+							{@const recorded = recordedFor(c)}
 							<tr class="line-row">
 								<td>
 									<div class="line-label">
 										<span>{c.label}{#if c.businessName} <span class="business-tag"><Briefcase size={14} /> {c.businessName}</span>{/if}</span>
 										<span class="line-detail">{c.detail}</span>
-										<code class="record-as">fact:set {c.key} {c.amount} --year {data.year + 1}{c.businessId ? ` --business ${c.businessId}` : ""}</code>
 									</div>
 								</td>
 								<td class="amount">{formatCurrencyPrecise(c.amount)}</td>
+								<td class="record-cell">
+									{#if recorded === c.amount}
+										<span class="recorded"><Check size={14} /> Recorded</span>
+									{:else}
+										<form method="POST" action="?/record&year={data.year}" use:enhance class="record-form">
+											<input type="hidden" name="key" value={c.key} />
+											<input type="hidden" name="businessId" value={c.businessId ?? ""} />
+											<input type="hidden" name="amount" value={c.amount} />
+											<Button variant={recorded === null ? "primary" : "secondary"} size="sm" type="submit">
+												{recorded === null ? `Record for ${data.year + 1}` : "Update"}
+											</Button>
+											{#if recorded !== null}
+												<span class="line-detail">now {formatCurrencyPrecise(recorded)}</span>
+											{/if}
+										</form>
+									{/if}
+								</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -323,10 +351,31 @@
 		font-size: 14px;
 	}
 
-	.record-as {
-		font-family: var(--font-mono);
-		font-size: 12px;
-		color: var(--color-text-muted);
+	.record-cell {
+		width: 1%;
+		white-space: nowrap;
+		text-align: right;
+	}
+
+	.record-form {
+		display: inline-flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 2px;
+	}
+
+	.recorded {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--spacing-xs);
+		color: var(--color-success);
+		font-size: 14px;
+	}
+
+	.form-error {
+		margin: var(--spacing-sm) 0 0;
+		color: var(--color-danger);
+		font-size: 14px;
 	}
 
 	.warnings {

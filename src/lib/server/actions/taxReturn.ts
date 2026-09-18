@@ -74,7 +74,11 @@ const reported = (category: TaxCategoryTotal | undefined) => category?.reportedT
 export async function getTaxReturn(bookId: string, year: number): Promise<TaxReturnResult> {
 	const constants = getTaxYearConstants(year);
 	if (!constants) {
-		return { available: false, reason: `No tax tables for ${year}.`, supportedYears: supportedTaxYears() };
+		return {
+			available: false,
+			reason: `No tax tables for ${year}: the draft return needs that year's brackets, standard deduction and credit figures, which the IRS publishes in the autumn before it. To add them, put a ${year} table in src/lib/server/taxReturn/constants.ts; for the filled PDF, also download the ${year} fillable forms into forms/irs/${year}/ and map their fields in src/lib/server/taxReturn/pdf.ts.`,
+			supportedYears: supportedTaxYears()
+		};
 	}
 
 	const [report, status] = await Promise.all([getTaxReportData(bookId, year), getTaxYearStatus(bookId, year)]);

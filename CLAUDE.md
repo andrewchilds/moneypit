@@ -411,7 +411,10 @@ Worksheet and lists next year's figures in `carryovers` (capital loss
 short and long, qualified business loss, home office per business; a
 carryover that came in and was used up is listed at zero): `return:show`
 prints them as a "Carryovers to <year+1>" block with the `fact:set` line
-that records each, and `/reports/tax/return` shows the same table. The
+that records each, and `/reports/tax/return` shows the same table with a
+"Record for <year+1>" button per row (a `record` form action that sets the
+answer; the row reads "Recorded" once next year's answer matches). A year
+without a constants table says so and names what to add. The
 PDF field maps mark lines whose parentheses are pre-printed on the form
 (`parenthesized`) so a loss prints without a second pair.
 
