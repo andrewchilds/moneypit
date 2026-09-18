@@ -3,7 +3,8 @@
 	import { enhance, deserialize } from "$app/forms";
 	import { invalidateAll } from "$app/navigation";
 	import { page } from "$app/state";
-	import { ArrowLeft, Briefcase, Crosshair, FileUp, Trash2, X } from "lucide-svelte";
+	import { browser } from "$app/environment";
+	import { ArrowLeft, Briefcase, Columns2, Crosshair, FileText, FileUp, Trash2, X } from "lucide-svelte";
 	import Button from "$lib/components/ui/Button.svelte";
 	import DocumentViewer, { type Pick } from "$lib/components/DocumentViewer.svelte";
 	import { figureInput, parseFigure } from "$lib/documentFigures";
@@ -19,11 +20,29 @@
 	// Other forms read from the same file (a consolidated 1099)
 	const siblings = $derived(doc.file?.documents.filter((d) => d.id !== doc.id) ?? []);
 
-	// Every row the sidebar shows: preset boxes first, then any others on the document
+	// Every row the sidebar shows: preset boxes first, then any others on the document.
+	// A row's group is the heading over it; consecutive rows sharing one sit under it.
 	const rows = $derived([
-		...presetBoxes.map((b) => ({ box: b.box, label: b.label, line: lineFor(b.box) })),
-		...extraLines.map((l) => ({ box: l.box, label: l.label, line: l }))
+		...presetBoxes.map((b) => ({ box: b.box, label: b.label, line: lineFor(b.box), group: b.group })),
+		...extraLines.map((l) => ({ box: l.box, label: l.label, line: l, group: extraLines.length > 0 && presetBoxes.length > 0 ? "Other boxes on this document" : undefined }))
 	]);
+
+	// ---- Layout: the file beside the form, or the file alone ----
+
+	type Layout = "split" | "document";
+	const LAYOUT_KEY = "documentViewerLayout";
+	let layout = $state<Layout>("split");
+
+	onMount(() => {
+		const saved = localStorage.getItem(LAYOUT_KEY);
+		if (saved === "split" || saved === "document") layout = saved;
+	});
+
+	function setLayout(next: Layout) {
+		layout = next;
+		if (browser) localStorage.setItem(LAYOUT_KEY, next);
+	}
+	const showForm = $derived(!doc.file || layout === "split");
 
 	// ---- Sidebar: one amount input per box, saved on Enter or blur ----
 
@@ -249,6 +268,14 @@
 		</div>
 		<div class="header-actions">
 			{#if doc.file}
+				<div class="layout-toggle" role="group" aria-label="Layout">
+					<button type="button" class:on={layout === "split"} onclick={() => setLayout("split")} title="File beside the form">
+						<Columns2 size={14} /> Split
+					</button>
+					<button type="button" class:on={layout === "document"} onclick={() => setLayout("document")} title="File only; figures are saved from the popover">
+						<FileText size={14} /> Document
+					</button>
+				</div>
 				<form method="POST" action="?/addFromFile" use:enhance>
 					<select
 						class="add-form-select"
@@ -294,7 +321,7 @@
 		<div class="error-banner">{form?.error ?? errorMsg}</div>
 	{/if}
 
-	<div class="workspace">
+	<div class="workspace" class:file-only={!showForm}>
 		<div class="file-pane">
 			{#if fileUrl && doc.file}
 				{#key doc.file.id}
@@ -381,6 +408,7 @@
 			{/if}
 		</div>
 
+		{#if showForm}
 		<aside class="form-pane">
 			<div class="form-pane-header">
 				<h2>{data.preset?.name ?? doc.formType}</h2>
@@ -397,8 +425,11 @@
 			</p>
 
 			<div class="rows">
-				{#each rows as row (row.box)}
+				{#each rows as row, i (row.box)}
 					{@const line = row.line}
+					{#if row.group && row.group !== rows[i - 1]?.group}
+						<h3 class="group-heading">{row.group}</h3>
+					{/if}
 					<div class="row" class:active={activeBox === row.box} class:filled={!!line}>
 						<button type="button" class="box-code mono" onclick={() => selectBox(row.box)} title="Select box {row.box}">
 							{row.box}
@@ -458,6 +489,7 @@
 				</div>
 			</div>
 		</aside>
+		{/if}
 	</div>
 
 	<!-- Hidden host so the dropzone's file input can submit the attach action -->
@@ -602,10 +634,46 @@
 
 	.workspace {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) 380px;
+		grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);
 		gap: var(--spacing-md);
 		flex: 1;
 		min-height: 0;
+	}
+
+	.workspace.file-only {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.layout-toggle {
+		display: flex;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		overflow: hidden;
+	}
+
+	.layout-toggle button {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--spacing-xs);
+		padding: 6px 10px;
+		font-size: 13px;
+		border: none;
+		background: var(--color-bg);
+		color: var(--color-text-muted);
+		cursor: pointer;
+	}
+
+	.layout-toggle button + button {
+		border-left: 1px solid var(--color-border);
+	}
+
+	.layout-toggle button:hover {
+		background: var(--color-bg-hover);
+	}
+
+	.layout-toggle button.on {
+		background: var(--color-primary-light);
+		color: var(--color-primary);
 	}
 
 	.file-pane {
@@ -668,9 +736,17 @@
 		flex-direction: column;
 	}
 
+	.group-heading {
+		margin: 0;
+		padding: var(--spacing-md) 0 var(--spacing-xs);
+		font-size: 12px;
+		font-weight: 600;
+		color: var(--color-text-muted);
+	}
+
 	.row {
 		display: grid;
-		grid-template-columns: 40px minmax(0, 1fr) 110px 48px;
+		grid-template-columns: auto minmax(0, 1fr) 120px 48px;
 		align-items: center;
 		gap: var(--spacing-sm);
 		padding: 6px 0;
@@ -686,8 +762,10 @@
 	}
 
 	.box-code {
-		padding: 3px 0;
+		min-width: 40px;
+		padding: 3px 8px;
 		font-size: 12px;
+		white-space: nowrap;
 		font-weight: 600;
 		text-align: center;
 		border: 1px solid var(--color-border);
@@ -717,9 +795,7 @@
 
 	.row-label {
 		font-size: 13px;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+		line-height: 1.3;
 	}
 
 	.category {

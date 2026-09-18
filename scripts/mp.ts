@@ -677,8 +677,13 @@ async function main() {
 			case "doc:forms": {
 				for (const [formType, preset] of Object.entries(FORM_PRESETS)) {
 					console.log(`${formType}  ${preset.name}`);
+					let group: string | undefined;
 					for (const box of preset.boxes) {
-						console.log(`    ${box.box.padEnd(4)} ${box.label}`);
+						if (box.group !== group) {
+							group = box.group;
+							if (group) console.log(`  ${group}`);
+						}
+						console.log(`    ${box.box.padEnd(10)} ${box.label}`);
 					}
 				}
 				break;

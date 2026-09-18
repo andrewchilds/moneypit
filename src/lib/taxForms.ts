@@ -10,6 +10,8 @@ export interface FormBoxPreset {
 	box: string;
 	label: string;
 	categoryHints?: string[];
+	/** Heading shown over a run of boxes that belong together (the four columns of one Form 8949 box) */
+	group?: string;
 }
 
 export interface FormPreset {
@@ -26,11 +28,12 @@ export interface FormPreset {
  */
 function form8949Boxes(box: string, description: string): FormBoxPreset[] {
 	const term = box === 'A' || box === 'B' ? 'short' : 'long';
+	const group = `Box ${box} · ${description}`;
 	return [
-		{ box, label: `Box ${box} (${description}): net gain or loss`, categoryHints: [`capital gains? - ${term} term`, '^capital gains$'] },
-		{ box: `${box}.proceeds`, label: `Box ${box}: proceeds (1099-B box 1d; Form 8949 column d)` },
-		{ box: `${box}.basis`, label: `Box ${box}: cost or other basis (1099-B box 1e; Form 8949 column e)` },
-		{ box: `${box}.adj.W`, label: `Box ${box}: wash sale loss disallowed (1099-B box 1g; Form 8949 column g, code W)` }
+		{ box, label: `Box ${box}: net gain or loss`, categoryHints: [`capital gains? - ${term} term`, '^capital gains$'], group },
+		{ box: `${box}.proceeds`, label: `Box ${box}: proceeds (1099-B box 1d)`, group },
+		{ box: `${box}.basis`, label: `Box ${box}: cost or other basis (1099-B box 1e)`, group },
+		{ box: `${box}.adj.W`, label: `Box ${box}: wash sale loss disallowed (1099-B box 1g)`, group }
 	];
 }
 
