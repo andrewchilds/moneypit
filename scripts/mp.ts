@@ -798,10 +798,14 @@ async function main() {
 							`      ${label}  box ${r.box.padEnd(4)} ${r.taxCategoryName.padEnd(30)} ${r.accountPath.padEnd(24)} books ${money(r.bookAmount).padStart(11)}  doc ${money(r.documentAmount).padStart(11)}  diff ${money(r.difference).padStart(11)}`
 						);
 					}
-				}
-				const untied = status.documents.filter((d) => d.status === "RECEIVED" && !d.accountId && d.lines.length > 0);
-				if (untied.length > 0) {
-					console.log(`\nNot tied to an account (their lines replace whole categories): ${untied.map((d) => `${d.formType} ${d.issuer}`).join(", ")}`);
+					const untied = status.untied.find((u) => u.documentId === doc.id);
+					if (untied) {
+						console.log(`      UNTIED    no account: each mapped box replaces the whole of its category (doc:update ${doc.id} --account <id>)`);
+						for (const c of untied.categories) {
+							const from = c.accounts.length > 0 ? ` from ${c.accounts.map((a) => `${a.path} ${money(a.total)}`).join(", ")}` : "";
+							console.log(`                ${c.taxCategoryName.padEnd(30)} books ${money(c.bookTotal).padStart(11)}  doc ${money(c.documentAmount).padStart(11)}${from}`);
+						}
+					}
 				}
 				break;
 			}

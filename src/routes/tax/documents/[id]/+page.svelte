@@ -4,7 +4,7 @@
 	import { invalidateAll } from "$app/navigation";
 	import { page } from "$app/state";
 	import { browser } from "$app/environment";
-	import { ArrowLeft, Briefcase, Columns2, Crosshair, FileText, FileUp, Trash2, X } from "lucide-svelte";
+	import { ArrowLeft, Briefcase, Columns2, Crosshair, FileText, FileUp, Trash2, TriangleAlert, X } from "lucide-svelte";
 	import Button from "$lib/components/ui/Button.svelte";
 	import DocumentViewer, { type Pick } from "$lib/components/DocumentViewer.svelte";
 	import { figureInput, parseFigure } from "$lib/documentFigures";
@@ -321,6 +321,16 @@
 		<div class="error-banner">{form?.error ?? errorMsg}</div>
 	{/if}
 
+	{#if !doc.account && doc.status === "RECEIVED"}
+		<div class="warning-banner">
+			<TriangleAlert size={16} />
+			<span>
+				<strong>Not tied to an account.</strong> Each mapped box replaces the whole of its category on the tax report, including what the books have from other accounts.
+				<a href="/tax/{doc.year}?tab=documents#doc-{doc.id}">Tie it to an account</a> so it replaces only that account's figure.
+			</span>
+		</div>
+	{/if}
+
 	<div class="workspace" class:file-only={!showForm}>
 		<div class="file-pane">
 			{#if fileUrl && doc.file}
@@ -630,6 +640,27 @@
 		background: var(--color-danger-light);
 		border: 1px solid var(--color-danger);
 		border-radius: var(--radius-md);
+	}
+
+	.warning-banner {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--spacing-sm);
+		padding: var(--spacing-sm) var(--spacing-md);
+		font-size: 13px;
+		background: var(--color-warning-light);
+		border-left: 3px solid var(--color-warning);
+		border-radius: var(--radius-md);
+	}
+
+	.warning-banner :global(svg) {
+		flex-shrink: 0;
+		margin-top: 1px;
+		color: #b8860b;
+	}
+
+	.warning-banner a {
+		color: var(--color-primary);
 	}
 
 	.workspace {

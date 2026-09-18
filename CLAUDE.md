@@ -258,7 +258,17 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   dividends recorded from another in place. A document with no account
   replaces the whole category. On expense categories, a document whose
   account has no transactions in the category also replaces the category (a
-  1098's real estate taxes box). The report's "Reported" column is the book
+  1098's real estate taxes box). A received document with no account is
+  flagged as untied (`untied` in `tax:status`, a yellow card with the
+  warning on the Documents tab, a banner on the viewer): the warning names
+  each category its boxes land on and the book activity there by
+  counterparty account, since the whole of it is replaced. Forms whose
+  category has no book transactions (a 1099-R, a K-1) lose nothing
+  untied; a 1099-INT, 1099-DIV or 1099-B should be tied to its account.
+  A document can be tied to one account, so an institution's single
+  1099-INT covering several accounts is either untied (right only while
+  every other source of the category has a document of its own) or tied
+  to the largest with a variance. The report's "Reported" column is the book
   total less what documents replaced plus the document figures; expanding the
   category shows the replaced amount as its own row when it is partial.
   On `/tax/<year>` and in `tax:status`, each received document tied to an

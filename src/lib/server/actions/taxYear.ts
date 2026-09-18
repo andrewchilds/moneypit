@@ -55,6 +55,25 @@ export interface DocumentReconciliation {
 }
 
 /**
+ * A received document tied to no account. Each of its mapped lines replaces
+ * the whole of its category on the tax report, so the book activity listed
+ * here (every account's total in that category this year) is dropped unless
+ * other documents put it back.
+ */
+export interface UntiedDocument {
+	documentId: string;
+	categories: {
+		taxCategoryId: string;
+		taxCategoryName: string;
+		/** The document's figure for the category */
+		documentAmount: number;
+		/** The book total the document replaces */
+		bookTotal: number;
+		accounts: { id: string; path: string; total: number }[];
+	}[];
+}
+
+/**
  * One questionnaire: a module's questions, for one business when the module
  * is per-business and the book has businesses.
  */
@@ -74,6 +93,8 @@ export interface TaxYearStatus {
 	expectedDocuments: ExpectedDocument[];
 	/** One per mapped line of each received document tied to an account */
 	reconciliations: DocumentReconciliation[];
+	/** Received documents tied to no account, with the book activity their lines replace */
+	untied: UntiedDocument[];
 	openQuestions: number;
 	missingDocuments: number;
 }
@@ -84,12 +105,12 @@ export interface TaxYearStatus {
  * documents the books suggest should exist.
  */
 export async function getTaxYearStatus(bookId: string, year: number): Promise<TaxYearStatus> {
-	const [enabled, facts, documents, businesses, reconciliations] = await Promise.all([
+	const [enabled, facts, documents, businesses, { reconciliations, untied }] = await Promise.all([
 		getEnabledModules(bookId),
 		listTaxFacts(bookId, year),
 		listTaxDocuments(bookId, year),
 		db.business.findMany({ where: { bookId }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } }),
-		reconcileDocuments(bookId, year)
+		compareDocuments(bookId, year)
 	]);
 
 	// Year-specific facts win over carry-forward facts. Keyed by business
@@ -178,17 +199,20 @@ export async function getTaxYearStatus(bookId: string, year: number): Promise<Ta
 	const openQuestions = modules.reduce((n, m) => n + m.questions.filter((q) => q.visible && !q.answered).length, 0);
 	const missingDocuments = expectedDocuments.filter((d) => d.status === 'missing').length;
 
-	return { year, businesses, modules, documents, expectedDocuments, reconciliations, openQuestions, missingDocuments };
+	return { year, businesses, modules, documents, expectedDocuments, reconciliations, untied, openQuestions, missingDocuments };
 }
 
 /**
- * Compare each received document tied to an account with the books: for
- * every mapped line, the transactions of that account in the line's category.
+ * Compare each received document with the books. A document tied to an
+ * account gets a reconciliation per mapped line: the transactions of that
+ * account in the line's category against the figure. A document tied to no
+ * account is listed as untied, with the whole-category book activity each of
+ * its mapped lines replaces.
  */
-export async function reconcileDocuments(bookId: string, year: number): Promise<DocumentReconciliation[]> {
+export async function compareDocuments(bookId: string, year: number): Promise<{ reconciliations: DocumentReconciliation[]; untied: UntiedDocument[] }> {
 	const [documents, totals, accounts] = await Promise.all([
 		db.taxDocument.findMany({
-			where: { bookId, year, status: 'RECEIVED', accountId: { not: null } },
+			where: { bookId, year, status: 'RECEIVED' },
 			include: {
 				account: { select: { id: true, path: true } },
 				lines: { where: { taxCategoryId: { not: null } }, include: { taxCategory: { select: { id: true, name: true } } }, orderBy: { box: 'asc' } }
@@ -196,29 +220,64 @@ export async function reconcileDocuments(bookId: string, year: number): Promise<
 			orderBy: [{ formType: 'asc' }, { issuer: 'asc' }]
 		}),
 		getTaxAccountTotals(bookId, year),
-		db.account.findMany({ where: { bookId, type: { in: ['INCOME', 'EXPENSE'] } }, select: { id: true, taxCategoryId: true } })
+		db.account.findMany({ where: { bookId }, select: { id: true, path: true, type: true, taxCategoryId: true } })
 	]);
 
 	// Counterparty rows of every account, grouped by the account's category
-	const categoryOf = new Map(accounts.map((a) => [a.id, a.taxCategoryId]));
+	const accountById = new Map(accounts.map((a) => [a.id, a]));
 	const rowsByCategory = new Map<string, OverlayRow[]>();
 	for (const t of totals) {
-		const categoryId = categoryOf.get(t.accountId);
+		const account = accountById.get(t.accountId);
+		const categoryId = account?.type === 'INCOME' || account?.type === 'EXPENSE' ? account.taxCategoryId : null;
 		if (!categoryId) continue;
 		const rows = rowsByCategory.get(categoryId) ?? [];
 		rows.push({ accountId: t.accountId, counterpartyId: t.counterpartyId, total: t.total });
 		rowsByCategory.set(categoryId, rows);
 	}
 
-	const result: DocumentReconciliation[] = [];
+	const reconciliations: DocumentReconciliation[] = [];
+	const untied: UntiedDocument[] = [];
 	for (const doc of documents) {
-		if (!doc.account) continue;
+		if (!doc.account) {
+			if (doc.lines.length === 0) continue;
+			// One entry per category the lines land on, the book side summed per
+			// counterparty (the asset account the money moved through, which is
+			// what a document gets tied to; the category's own account when the
+			// other side is still uncategorized)
+			const categories = new Map<string, UntiedDocument['categories'][number]>();
+			for (const line of doc.lines) {
+				if (!line.taxCategory) continue;
+				let entry = categories.get(line.taxCategory.id);
+				if (!entry) {
+					const perAccount = new Map<string, number>();
+					for (const row of rowsByCategory.get(line.taxCategory.id) ?? []) {
+						const id = row.counterpartyId ?? row.accountId;
+						perAccount.set(id, (perAccount.get(id) ?? 0) + row.total);
+					}
+					const accountRows = Array.from(perAccount, ([id, total]) => ({ id, path: accountById.get(id)?.path ?? id, total: round2(total) }))
+						.filter((a) => a.total !== 0)
+						.sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+					entry = {
+						taxCategoryId: line.taxCategory.id,
+						taxCategoryName: line.taxCategory.name,
+						documentAmount: 0,
+						bookTotal: round2(accountRows.reduce((sum, a) => sum + a.total, 0)),
+						accounts: accountRows
+					};
+					categories.set(line.taxCategory.id, entry);
+				}
+				entry.documentAmount = round2(entry.documentAmount + Number(line.amount));
+			}
+			// A box at zero on a category the books have nothing in changes nothing
+			untied.push({ documentId: doc.id, categories: Array.from(categories.values()).filter((c) => c.documentAmount !== 0 || c.bookTotal !== 0) });
+			continue;
+		}
 		for (const line of doc.lines) {
 			if (!line.taxCategory) continue;
 			const book = bookFigureForAccount(rowsByCategory.get(line.taxCategory.id) ?? [], doc.account.id);
 			const documentAmount = Number(line.amount);
-			const difference = Math.round((documentAmount - book.amount) * 100) / 100;
-			result.push({
+			const difference = round2(documentAmount - book.amount);
+			reconciliations.push({
 				documentId: doc.id,
 				lineId: line.id,
 				box: line.box,
@@ -234,8 +293,10 @@ export async function reconcileDocuments(bookId: string, year: number): Promise<
 			});
 		}
 	}
-	return result;
+	return { reconciliations, untied };
 }
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 type ExpectedDocumentDraft = Omit<ExpectedDocument, 'status' | 'documentId'>;
 
