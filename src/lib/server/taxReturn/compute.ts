@@ -7,7 +7,9 @@
  * simplified QBI deduction), Schedule 1, Schedule 2 (self-employment tax,
  * additional Medicare tax, net investment income tax), Schedule 3 (an
  * extension payment), Schedules A and B, Form 8949 (one row per 1099-B
- * box, summarised per broker) with Schedule D, Schedule 8812 (the child tax
+ * box, summarised per broker) with Schedule D, Form 6781 (section 1256
+ * contracts from a K-1's box 11C, split 40% short-term and 60% long-term
+ * onto Schedule D lines 4 and 11), Schedule 8812 (the child tax
  * credit and its refundable part), Schedule EIC and the earned income
  * credit, and Form 1040 through the refund or amount owed. Carryovers from
  * last year's return come in as answers (capital loss, qualified business
@@ -22,7 +24,7 @@ import { isShortTermBox, LONG_TERM_BOXES, ROWS_PER_PAGE, SCHEDULE_D_LINE, SHORT_
 
 export type { CapitalGainRow } from './form8949';
 
-export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f8949' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8995';
+export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f8949' | 'f6781' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8995';
 
 export interface PayerFigure {
 	name: string;
@@ -123,9 +125,16 @@ export interface ReturnInput {
 	 * behind them (book transactions, a 1099-B entered as a net figure),
 	 * which go on Schedule D lines 1a and 8a; `distributions` are capital
 	 * gain distributions from funds (1099-DIV box 2a), long-term by law, on
-	 * line 13.
+	 * line 13; `partnershipShort` and `partnershipLong` are the net gains
+	 * passed through on Schedule K-1 (boxes 8 and 9a), on lines 5 and 12.
 	 */
-	capitalGains: { shortTerm: number; longTerm: number; distributions: number; rows: CapitalGainRow[] };
+	capitalGains: { shortTerm: number; longTerm: number; distributions: number; partnershipShort: number; partnershipLong: number; rows: CapitalGainRow[] };
+	/**
+	 * Section 1256 contracts marked to market, one entry per account (a
+	 * K-1's box 11 code C, regulated futures on a 1099-B), signed: Form 6781
+	 * line 1, whose net goes 40% short-term and 60% long-term to Schedule D
+	 */
+	section1256: PayerFigure[];
 	unemployment: number;
 	stateRefund: number;
 	scheduleENet: number;
@@ -557,6 +566,47 @@ function forms8949(rows: CapitalGainRow[], name: string, ssn: string, warnings: 
 	return { forms, totals };
 }
 
+/**
+ * Form 6781 Part I: section 1256 contracts marked to market, one line 1
+ * row per account, the net split 40% short-term and 60% long-term for
+ * Schedule D lines 4 and 11. Parts II and III (straddles, unrecognized
+ * gains) are not produced.
+ */
+function form6781(sources: PayerFigure[], name: string, ssn: string, warnings: string[]): FormBuilder | null {
+	const rows = sources.filter((r) => r.amount !== 0);
+	if (rows.length === 0) return null;
+	const f = new FormBuilder('f6781', 'Form 6781', 'Gains and Losses From Section 1256 Contracts and Straddles');
+	f.text('name', 'Name(s) shown on tax return', name);
+	f.text('ssn', 'Identifying number', ssn);
+	f.form.pages = [1];
+	// Line 1 has three rows; further accounts fold into the third
+	const listed = rows.length > 3 ? [...rows.slice(0, 2), { name: 'Other accounts (see statement)', amount: sum(rows.slice(2).map((r) => r.amount)) }] : rows;
+	if (rows.length > 3) warnings.push('Form 6781 line 1 has three rows; the rest of the section 1256 accounts are combined on the third, so attach a statement listing them.');
+	let losses = 0;
+	let gains = 0;
+	listed.forEach((r, i) => {
+		const n = i + 1;
+		f.text(`1.desc.${n}`, `Row ${n}: identification of account`, r.name);
+		f.amount(`1.loss.${n}`, `Row ${n}: loss`, Math.min(0, r.amount), 'input');
+		f.amount(`1.gain.${n}`, `Row ${n}: gain`, Math.max(0, r.amount), 'input');
+		losses = round2(losses + Math.min(0, r.amount));
+		gains = round2(gains + Math.max(0, r.amount));
+	});
+	f.amount('2.loss', 'Line 2: total of column (b), losses', losses, 'total');
+	f.amount('2.gain', 'Line 2: total of column (c), gains', gains, 'total');
+	const line3 = f.amount('3', 'Net gain or loss', losses + gains, 'computed', 'Line 2 columns (b) and (c) combined');
+	const line4 = f.amount('4', 'Form 1099-B adjustments', 0, 'input');
+	const line5 = f.amount('5', 'Combine lines 3 and 4', line3 + line4);
+	const line6 = f.amount('6', 'Net section 1256 contracts loss carried back (box D election)', 0, 'input');
+	const line7 = f.amount('7', 'Combine lines 5 and 6', line5 + line6, 'total');
+	const line8 = f.amount('8', 'Short-term capital gain or loss (to Schedule D line 4)', line7 * 0.4, 'result', `40% of ${money(line7)}`);
+	f.amount('9', 'Long-term capital gain or loss (to Schedule D line 11)', line7 - line8, 'result', `60% of ${money(line7)}`);
+	if (line7 < 0) {
+		warnings.push('Form 6781 shows a net section 1256 contracts loss; the box D election to carry it back against the three prior years’ section 1256 gains is not taken (line 6 is zero).');
+	}
+	return f;
+}
+
 export function computeReturn(input: ReturnInput, constants: TaxYearConstants): ReturnComputation {
 	const warnings: string[] = [...input.notes];
 	const status: FilingStatus = input.filingStatus ?? 'single';
@@ -697,10 +747,21 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	let netShortTerm = 0;
 	let netLongTerm = 0;
 	let scheduleD: FormBuilder | null = null;
-	const { shortTerm, longTerm, distributions, rows } = input.capitalGains;
+	const { shortTerm, longTerm, distributions, partnershipShort, partnershipLong, rows } = input.capitalGains;
 	const carry = input.carryovers;
 	const f8949 = forms8949(rows, `${id.firstName} ${id.lastName}`.trim(), id.ssn, warnings);
-	if (shortTerm !== 0 || longTerm !== 0 || distributions !== 0 || rows.length > 0 || carry.capitalLossShort !== 0 || carry.capitalLossLong !== 0) {
+	const f6781 = form6781(input.section1256, `${id.firstName} ${id.lastName}`.trim(), id.ssn, warnings);
+	if (
+		shortTerm !== 0 ||
+		longTerm !== 0 ||
+		distributions !== 0 ||
+		partnershipShort !== 0 ||
+		partnershipLong !== 0 ||
+		rows.length > 0 ||
+		f6781 !== null ||
+		carry.capitalLossShort !== 0 ||
+		carry.capitalLossLong !== 0
+	) {
 		const d = new FormBuilder('f1040sd', 'Schedule D', 'Capital Gains and Losses');
 		scheduleD = d;
 		d.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
@@ -731,15 +792,19 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		const d1b = fromForm8949('1b');
 		const d2 = fromForm8949('2');
 		const d3 = fromForm8949('3');
+		const d4 = d.amount('4', 'Short-term gain or loss from Form 6781', f6781?.get('8') ?? 0, 'input', f6781 ? '40% of the net section 1256 contracts gain or loss, Form 6781 line 8' : undefined);
+		const d5 = d.amount('5', 'Net short-term gain or loss from partnerships, S corporations, estates, and trusts (Schedule K-1)', partnershipShort, 'input');
 		const d6 = d.amount('6', 'Short-term capital loss carryover', -Math.abs(carry.capitalLossShort), 'input', `From last year's Capital Loss Carryover Worksheet`);
-		const d7 = d.amount('7', 'Net short-term capital gain or loss', d1a + d1b + d2 + d3 + d6, 'total', 'Lines 1a through 6');
+		const d7 = d.amount('7', 'Net short-term capital gain or loss', d1a + d1b + d2 + d3 + d4 + d5 + d6, 'total', 'Lines 1a through 6');
 		const d8a = netOnly('8a', longTerm, 'Long-term');
 		const d8b = fromForm8949('8b');
 		const d9 = fromForm8949('9');
 		const d10 = fromForm8949('10');
+		const d11 = d.amount('11', 'Long-term gain or loss from Form 6781', f6781?.get('9') ?? 0, 'input', f6781 ? '60% of the net section 1256 contracts gain or loss, Form 6781 line 9' : undefined);
+		const d12 = d.amount('12', 'Net long-term gain or loss from partnerships, S corporations, estates, and trusts (Schedule K-1)', partnershipLong, 'input');
 		const d13 = d.amount('13', 'Capital gain distributions', distributions, 'input', 'Box 2a of the 1099-DIVs; always long-term');
 		const d14 = d.amount('14', 'Long-term capital loss carryover', -Math.abs(carry.capitalLossLong), 'input', `From last year's Capital Loss Carryover Worksheet`);
-		const d15 = d.amount('15', 'Net long-term capital gain or loss', d8a + d8b + d9 + d10 + d13 + d14, 'total', 'Lines 8a through 14');
+		const d15 = d.amount('15', 'Net long-term capital gain or loss', d8a + d8b + d9 + d10 + d11 + d12 + d13 + d14, 'total', 'Lines 8a through 14');
 		const d16 = d.amount('16', 'Combine lines 7 and 15', d7 + d15, 'total');
 		netCapital = d16;
 		netShortTerm = d7;
@@ -1200,6 +1265,7 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	if (scheduleEIC) forms.push(scheduleEIC.form);
 	if (s8812) forms.push(s8812.form);
 	if (f8995) forms.push(f8995.form);
+	if (f6781) forms.push(f6781.form);
 
 	return {
 		year: input.year,

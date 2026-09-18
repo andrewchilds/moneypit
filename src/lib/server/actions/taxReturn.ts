@@ -67,6 +67,7 @@ function categoryOn(section: ScheduleSection | undefined, line: string): TaxCate
 
 const reported = (category: TaxCategoryTotal | undefined) => category?.reportedTotal ?? 0;
 const round2 = (n: number) => Math.round(n * 100) / 100 || 0;
+const money = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /**
  * Assemble the return's input from the tax report, the questionnaire, and
@@ -153,6 +154,16 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 					}
 				}
 			}
+		} else if (form === 'K-1') {
+			// The categorized boxes reach their lines through the report; these three have no line on the return
+			const portfolio = box('13AE');
+			if (portfolio && portfolio.amount !== 0) {
+				notes.push(
+					`Schedule K-1 from ${doc.issuer}: box 13 code AE portfolio deductions of ${money(portfolio.amount)} are not deductible federally (miscellaneous itemized deductions are suspended)${portfolio.mapped ? ', but the line is mapped to a tax category; unmap it so the report leaves it out' : ', so they are left off the return'}.`
+				);
+			}
+			box('20A');
+			box('20B');
 		}
 	}
 	const unmapped = docs.flatMap((d) => d.lines).filter((l) => l.taxCategoryId === null && Number(l.amount) !== 0 && !consumed.has(l.id)).length;
@@ -168,6 +179,13 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 	const scheduleE = sectionsOf('Schedule E')[0];
 	const schedule1 = sectionsOf('Schedule 1')[0];
 	const form1040 = sectionsOf('Form 1040')[0];
+	const form6781 = sectionsOf('Form 6781')[0];
+	const partnershipIncome = reported(categoryOn(scheduleE, '28'));
+	if (partnershipIncome !== 0) {
+		notes.push(
+			`Partnership income of ${money(partnershipIncome)} (Schedule K-1 boxes 1 to 3) is carried to Schedule 1 line 5 in full; Schedule E page 2 is not produced and the passive activity loss rules for publicly traded partnerships are not applied.`
+		);
+	}
 	// A 1099-R box 2a mapped to a category reaches line 4b through the report
 	retirement.taxable += reported(categoryOn(form1040, '4b'));
 
@@ -270,8 +288,11 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 			shortTerm: netOnly(categoryOn(scheduleD, '1')),
 			longTerm: netOnly(categoryOn(scheduleD, '8')),
 			distributions: reported(categoryOn(scheduleD, '13')),
+			partnershipShort: reported(categoryOn(scheduleD, '5')),
+			partnershipLong: reported(categoryOn(scheduleD, '12')),
 			rows: capitalGainRows
 		},
+		section1256: payersOf(categoryOn(form6781, '1')),
 		unemployment,
 		stateRefund,
 		scheduleENet: scheduleE?.reportedNet ?? 0,

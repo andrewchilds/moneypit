@@ -390,8 +390,8 @@ of one account that add up to more than 100% across businesses are flagged.
 draft Form 1040 with its schedules: Schedule C per business (with Part V
 listing the categories behind line 27b and cost of goods sold on line 4),
 Schedule SE per owner, Form 8995 (simplified QBI, with the loss carryforward
-on line 16), Schedules 1, 2, 3, A and B, Form 8949 with Schedule D (below),
-Schedule 8812 (child tax credit
+on line 16), Schedules 1, 2, 3, A and B, Form 8949 with Schedule D and
+Form 6781 (below), Schedule 8812 (child tax credit
 and the refundable additional child tax credit) and Schedule EIC with the
 earned income credit (figured the way the EIC table is, at the midpoint of
 each $50 range), through withholding, estimated payments and the refund or
@@ -441,6 +441,23 @@ lines 1a and 8a with a warning. `src/lib/server/taxReturn/form8949.ts`
 holds the parsing. On a Box B or E sale whose basis on the 1099-B is wrong,
 enter the correct basis (the IRS has none to correct); a wrong basis on
 Box A or D is a `.adj.B` adjustment against the basis as reported.
+
+A Schedule K-1 (Form 1065) is entered by box (`doc:forms` lists them): 5,
+6a and 6b map to the Schedule B categories and reach Schedule B with the
+partnership as payer; 8 and 9a map to "Partnership Capital Gains - Short
+Term" and "- Long Term" (Schedule D lines 5 and 12); 1 to 3 map to
+"Partnership Income" (Schedule E line 28), which the return carries to
+Schedule 1 line 5 with a warning that Schedule E page 2 is not produced and
+the publicly traded partnership passive loss rules are not applied; 11C
+maps to "Section 1256 Contracts" (Form 6781 line 1). Those four categories
+are in `us-personal-base`. Form 6781 Part I lists one line 1 row per payer
+of that category (`section1256` in `ReturnInput`, built like the Schedule B
+payers), combines them and splits line 7 40% short-term to Schedule D line
+4 and 60% long-term to line 11; the box D carryback election is not taken.
+13AE (portfolio deductions) is not deductible federally and 20A and 20B are
+Form 4952 figures, so they have no category and the return notes 13AE. A
+K-1 basis adjustment on a sale does not go on the K-1: it goes into the
+1099-B's basis (Box B or E) or a `.adj.B` line (Box A or D), as above.
 
 Carryovers from last year's return are year-keyed answers, entered as
 positive amounts: `capital_loss_carryover_short` and `_long` (Schedule D

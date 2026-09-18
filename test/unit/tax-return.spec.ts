@@ -65,7 +65,8 @@ function input(overrides: Partial<ReturnInput> = {}): ReturnInput {
 		interest: { taxable: [], taxExempt: 0 },
 		dividends: { ordinary: [], qualified: 0, ordinaryIncludesQualified: false },
 		retirement: { gross: 0, taxable: 0 },
-		capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, rows: [] },
+		capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] },
+		section1256: [],
 		unemployment: 0,
 		stateRefund: 0,
 		scheduleENet: 0,
@@ -274,7 +275,7 @@ describe('computeReturn', () => {
 				wages: 50000,
 				interest: { taxable: [{ name: 'Ally', amount: 400 }, { name: 'Marcus', amount: 250.5 }], taxExempt: 100 },
 				dividends: { ordinary: [{ name: 'Vanguard', amount: 2000 }], qualified: 1500, ordinaryIncludesQualified: true },
-				capitalGains: { shortTerm: -5000, longTerm: 500, distributions: 0, rows: [] }
+				capitalGains: { shortTerm: -5000, longTerm: 500, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] }
 			}),
 			c2025
 		);
@@ -296,7 +297,7 @@ describe('computeReturn', () => {
 	});
 
 	it('carries the whole capital loss forward when income is already below zero', () => {
-		const r = computeReturn(input({ wages: 5000, capitalGains: { shortTerm: -8000, longTerm: 0, distributions: 0, rows: [] } }), c2025);
+		const r = computeReturn(input({ wages: 5000, capitalGains: { shortTerm: -8000, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] } }), c2025);
 		expect(line(r, 'f1040', '7')).toBe(-3000);
 		expect(r.summary.taxableIncome).toBe(0);
 		// Taxable income before the loss is 5,000 − 15,750 = −10,750, so none of the 3,000 is used
@@ -306,7 +307,7 @@ describe('computeReturn', () => {
 	});
 
 	it('puts capital gain distributions on Schedule D line 13 as long-term gain', () => {
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: -200, longTerm: 0, distributions: 750.25, rows: [] } }), c2025);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: -200, longTerm: 0, distributions: 750.25, partnershipShort: 0, partnershipLong: 0, rows: [] } }), c2025);
 		expect(line(r, 'f1040sd', '13')).toBe(750.25);
 		expect(line(r, 'f1040sd', '15')).toBe(750.25);
 		expect(line(r, 'f1040sd', '16')).toBe(550.25);
@@ -518,7 +519,7 @@ describe('self-employment deductions', () => {
 	});
 
 	it('does not let a negative AGI inflate the medical deduction', () => {
-		const r = computeReturn(input({ capitalGains: { shortTerm: -3000, longTerm: 0, distributions: 0, rows: [] }, itemized: { ...input().itemized, medical: 4000 } }), c2025);
+		const r = computeReturn(input({ capitalGains: { shortTerm: -3000, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] }, itemized: { ...input().itemized, medical: 4000 } }), c2025);
 		expect(r.summary.adjustedGrossIncome).toBe(-3000);
 		expect(r.forms.find((f) => f.id === 'f1040')?.lines.find((l) => l.line === '12e')?.detail).toContain('itemizing would give 4,000.00');
 	});
@@ -553,7 +554,7 @@ describe('carryovers', () => {
 
 	it('reports next year’s capital loss carryover instead of a warning', () => {
 		// Interest 5,000, short −17,293, long 5,349 (single): AGI 2,000, taxable income negative before the loss
-		const r = computeReturn(input({ interest: { taxable: [{ name: 'Bank', amount: 5000 }], taxExempt: 0 }, capitalGains: { shortTerm: -17293, longTerm: 5349, distributions: 0, rows: [] } }), c2025);
+		const r = computeReturn(input({ interest: { taxable: [{ name: 'Bank', amount: 5000 }], taxExempt: 0 }, capitalGains: { shortTerm: -17293, longTerm: 5349, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] } }), c2025);
 		expect(line(r, 'f1040sd', '16')).toBe(-11944);
 		expect(line(r, 'f1040sd', '21')).toBe(-3000);
 		expect(line(r, 'f1040', '11')).toBe(2000);
@@ -577,14 +578,14 @@ describe('carryovers', () => {
 	});
 
 	it('lists a used-up carryover at zero', () => {
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 5000, longTerm: 0, distributions: 0, rows: [] }, carryovers: { capitalLossShort: 1000, capitalLossLong: 0, qbiLoss: 0, nol: 0 } }), c2025);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 5000, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] }, carryovers: { capitalLossShort: 1000, capitalLossLong: 0, qbiLoss: 0, nol: 0 } }), c2025);
 		expect(line(r, 'f1040sd', '16')).toBe(4000);
 		expect(carryover(r, 'capital_loss_carryover_short')?.amount).toBe(0);
 		expect(carryover(r, 'capital_loss_carryover_short')?.detail).toContain('used up');
 	});
 
 	it('has no carryover entries when nothing carries', () => {
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 5000, longTerm: 0, distributions: 0, rows: [] } }), c2025);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 5000, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] } }), c2025);
 		expect(r.carryovers).toEqual([]);
 	});
 
@@ -657,7 +658,7 @@ describe('Form 8949 and Schedule D', () => {
 	const forms8949 = (r: ReturnType<typeof computeReturn>) => r.forms.filter((f) => f.id === 'f8949');
 
 	it('reproduces the 2024 filed Schedule D from Form 8949 rows', () => {
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, rows: filed2024 } }), c2024);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: filed2024 } }), c2024);
 		expect(line(r, 'f1040sd', '1b.proc')).toBe(32889);
 		expect(line(r, 'f1040sd', '1b.basis')).toBe(27062);
 		expect(line(r, 'f1040sd', '1b')).toBe(5827);
@@ -679,7 +680,7 @@ describe('Form 8949 and Schedule D', () => {
 	});
 
 	it('pairs short-term and long-term pages into as few Forms 8949 as possible', () => {
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, rows: filed2024 } }), c2024);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: filed2024 } }), c2024);
 		const forms = forms8949(r);
 		expect(forms.length).toBe(2);
 		// Box A with Box D on the first form, both pages; Box B alone on the second, page 1 only
@@ -705,7 +706,7 @@ describe('Form 8949 and Schedule D', () => {
 
 	it('starts a new page after eleven rows of one box and adds the pages into the Schedule D line', () => {
 		const rows = Array.from({ length: 13 }, (_, i) => row('A', `Broker ${i + 1} - various`, 1000, 900));
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, rows } }), c2025);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows } }), c2025);
 		const forms = forms8949(r);
 		expect(forms.map((f) => f.pages)).toEqual([[1], [1]]);
 		expect(forms.map((f) => f.checks)).toEqual([['box:A'], ['box:A']]);
@@ -718,7 +719,7 @@ describe('Form 8949 and Schedule D', () => {
 
 	it('prints a wash sale as a code W adjustment and checks the columns against the net figure entered', () => {
 		const rows = [row('A', 'Betterment - various', 1200, 1269.63, { adjustments: [{ code: 'W', amount: 3.35 }], reported: -66.28 })];
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, rows } }), c2025);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows } }), c2025);
 		const form = forms8949(r)[0];
 		const on = (key: string) => form.lines.find((l) => l.line === key);
 		expect(on('I.1.code')?.text).toBe('W');
@@ -728,14 +729,14 @@ describe('Form 8949 and Schedule D', () => {
 		expect(line(r, 'f1040sd', '1b')).toBe(-66.28);
 		expect(r.warnings.some((w) => w.includes('check the entries'))).toBe(false);
 
-		const off = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, rows: [{ ...rows[0], reported: -69.63 }] } }), c2025);
+		const off = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [{ ...rows[0], reported: -69.63 }] } }), c2025);
 		expect(off.warnings.some((w) => w.includes('come to -66.28, but the net gain or loss entered on the 1099-B is -69.63'))).toBe(true);
 		expect(line(off, 'f1040sd', '1b')).toBe(-66.28);
 	});
 
 	it('keeps net-only figures on lines 1a and 8a with a warning, alongside Form 8949 rows', () => {
 		const r = computeReturn(
-			input({ wages: 60000, capitalGains: { shortTerm: -500, longTerm: 250, distributions: 0, rows: [row('D', 'Vanguard - various', 5000, 4000)] } }),
+			input({ wages: 60000, capitalGains: { shortTerm: -500, longTerm: 250, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [row('D', 'Vanguard - various', 5000, 4000)] } }),
 			c2025
 		);
 		expect(line(r, 'f1040sd', '1a')).toBe(-500);
@@ -751,10 +752,79 @@ describe('Form 8949 and Schedule D', () => {
 	});
 
 	it('answers line 17 no when the net gain is short-term', () => {
-		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, rows: [row('A', 'Ally - various', 5000, 4000), row('D', 'Ally - various', 100, 300)] } }), c2025);
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [row('A', 'Ally - various', 5000, 4000), row('D', 'Ally - various', 100, 300)] } }), c2025);
 		expect(line(r, 'f1040sd', '16')).toBe(800);
 		expect(checks(r, 'f1040sd')).toEqual(['qof:no', '17:no']);
 		expect(line(r, 'f1040', '7')).toBe(800);
+	});
+});
+
+describe('Form 6781 and Schedule K-1', () => {
+	const svix = { name: '1X Short VIX Futures ETF (SVIX)', amount: -933 };
+
+	it('splits a K-1 box 11C loss 40% short-term and 60% long-term onto Schedule D lines 4 and 11', () => {
+		const r = computeReturn(input({ wages: 60000, section1256: [svix] }), c2025);
+		const f = r.forms.find((f) => f.id === 'f6781')!;
+		expect(f.pages).toEqual([1]);
+		expect(f.lines.find((l) => l.line === '1.desc.1')?.text).toBe('1X Short VIX Futures ETF (SVIX)');
+		expect(line(r, 'f6781', '1.loss.1')).toBe(-933);
+		expect(line(r, 'f6781', '1.gain.1')).toBe(0);
+		expect(line(r, 'f6781', '2.loss')).toBe(-933);
+		expect(line(r, 'f6781', '2.gain')).toBe(0);
+		expect(line(r, 'f6781', '3')).toBe(-933);
+		expect(line(r, 'f6781', '7')).toBe(-933);
+		expect(line(r, 'f6781', '8')).toBe(-373.2);
+		expect(line(r, 'f6781', '9')).toBe(-559.8);
+		expect(line(r, 'f1040sd', '4')).toBe(-373.2);
+		expect(line(r, 'f1040sd', '11')).toBe(-559.8);
+		expect(line(r, 'f1040sd', '7')).toBe(-373.2);
+		expect(line(r, 'f1040sd', '15')).toBe(-559.8);
+		expect(line(r, 'f1040sd', '16')).toBe(-933);
+		expect(line(r, 'f1040', '7')).toBe(-933);
+		// Attachment sequence 82 puts it after everything else
+		expect(r.forms[r.forms.length - 1].id).toBe('f6781');
+		expect(r.warnings.some((w) => w.includes('box D election'))).toBe(true);
+	});
+
+	it('keeps losses in column (b) and gains in column (c), with lines 8 and 9 adding up to line 7', () => {
+		const r = computeReturn(input({ wages: 60000, section1256: [{ name: 'Futures account', amount: 1000.55 }, { name: 'UVIX', amount: -250.25 }] }), c2025);
+		expect(line(r, 'f6781', '1.gain.1')).toBe(1000.55);
+		expect(line(r, 'f6781', '1.loss.1')).toBe(0);
+		expect(line(r, 'f6781', '1.loss.2')).toBe(-250.25);
+		expect(line(r, 'f6781', '2.loss')).toBe(-250.25);
+		expect(line(r, 'f6781', '2.gain')).toBe(1000.55);
+		expect(line(r, 'f6781', '3')).toBe(750.3);
+		expect(line(r, 'f6781', '8')).toBe(300.12);
+		expect(line(r, 'f6781', '9')).toBe(450.18);
+		expect(line(r, 'f1040sd', '16')).toBe(750.3);
+		expect(r.warnings.some((w) => w.includes('box D election'))).toBe(false);
+	});
+
+	it('folds a fourth account into the third row with a warning', () => {
+		const r = computeReturn(input({ wages: 60000, section1256: [{ name: 'A', amount: 10 }, { name: 'B', amount: 20 }, { name: 'C', amount: 30 }, { name: 'D', amount: -5 }] }), c2025);
+		const f = r.forms.find((f) => f.id === 'f6781')!;
+		expect(f.lines.find((l) => l.line === '1.desc.3')?.text).toBe('Other accounts (see statement)');
+		expect(line(r, 'f6781', '1.gain.3')).toBe(25);
+		expect(line(r, 'f6781', '1.desc.4')).toBeUndefined();
+		expect(line(r, 'f6781', '3')).toBe(55);
+		expect(r.warnings.some((w) => w.includes('three rows'))).toBe(true);
+	});
+
+	it('produces no Form 6781 for zero entries and leaves Schedule D lines 4 and 11 at zero', () => {
+		const r = computeReturn(input({ wages: 60000, section1256: [{ name: 'Nothing', amount: 0 }], capitalGains: { ...input().capitalGains, shortTerm: 100 } }), c2025);
+		expect(r.forms.some((f) => f.id === 'f6781')).toBe(false);
+		expect(line(r, 'f1040sd', '4')).toBe(0);
+		expect(line(r, 'f1040sd', '11')).toBe(0);
+	});
+
+	it('puts K-1 boxes 8 and 9a on Schedule D lines 5 and 12', () => {
+		const r = computeReturn(input({ wages: 60000, capitalGains: { ...input().capitalGains, partnershipShort: 100, partnershipLong: -40 } }), c2025);
+		expect(line(r, 'f1040sd', '5')).toBe(100);
+		expect(line(r, 'f1040sd', '12')).toBe(-40);
+		expect(line(r, 'f1040sd', '7')).toBe(100);
+		expect(line(r, 'f1040sd', '15')).toBe(-40);
+		expect(line(r, 'f1040sd', '16')).toBe(60);
+		expect(line(r, 'f1040', '7')).toBe(60);
 	});
 });
 

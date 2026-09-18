@@ -959,6 +959,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 		'Schedule E': 'Supplemental Income and Loss',
 		'Schedule SE': 'Self-Employment Tax',
 		'Schedule 1': 'Additional Income and Adjustments',
+		'Form 6781': 'Gains and Losses From Section 1256 Contracts and Straddles',
 		'Schedule CA': 'California Adjustments',
 		'Form 1120': 'U.S. Corporation Income Tax Return',
 		'IT-201': 'New York State Resident Income Tax',
@@ -984,7 +985,7 @@ export async function getTaxReportData(bookId: string, year: number): Promise<Ta
 
 	// Sort sections by schedule (Schedule C first for business users), then
 	// by business in creation order with unassigned accounts last.
-	const scheduleOrder = ['Schedule C', 'Schedule A', 'Schedule B', 'Schedule D', 'Schedule E', 'Schedule 1', 'Form 1120', 'IT-201', 'NJ-1040'];
+	const scheduleOrder = ['Schedule C', 'Schedule A', 'Schedule B', 'Schedule D', 'Form 6781', 'Schedule E', 'Schedule 1', 'Form 1120', 'IT-201', 'NJ-1040'];
 	const businessOrder = (scope: string | null) => {
 		if (scope === null) return -1;
 		if (scope === '') return businesses.length;

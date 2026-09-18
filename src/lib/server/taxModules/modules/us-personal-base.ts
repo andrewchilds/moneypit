@@ -72,6 +72,11 @@ export const usPersonalBase: TaxModule = {
 		{ name: 'Capital Gains - Short Term', scheduleRef: 'Schedule D Line 1', description: 'Short-term capital gains (held < 1 year)' },
 		{ name: 'Capital Gains - Long Term', scheduleRef: 'Schedule D Line 8', description: 'Long-term capital gains (held >= 1 year)' },
 		{ name: 'Capital Gain Distributions', scheduleRef: 'Schedule D Line 13', description: 'Capital gain distributions from mutual funds and ETFs (1099-DIV box 2a)' },
+		// Schedule K-1 (Form 1065) figures with lines of their own
+		{ name: 'Partnership Capital Gains - Short Term', scheduleRef: 'Schedule D Line 5', description: 'Net short-term capital gain or loss from partnerships (Schedule K-1 box 8)' },
+		{ name: 'Partnership Capital Gains - Long Term', scheduleRef: 'Schedule D Line 12', description: 'Net long-term capital gain or loss from partnerships (Schedule K-1 box 9a)' },
+		{ name: 'Partnership Income', scheduleRef: 'Schedule E Line 28', description: 'Ordinary business and rental income or loss from partnerships (Schedule K-1 boxes 1 to 3)' },
+		{ name: 'Section 1256 Contracts', scheduleRef: 'Form 6781 Line 1', description: 'Section 1256 contracts marked to market (Schedule K-1 box 11 code C, regulated futures on a 1099-B); 40% short-term and 60% long-term' },
 		// Non-deductible
 		{ name: 'Not Deductible', scheduleRef: 'N/A', description: 'Personal expenses - not tax deductible' },
 		{ name: 'Tax Exempt', scheduleRef: 'N/A', description: 'Tax-exempt income (municipal bonds, etc.)' },

@@ -73,6 +73,18 @@ function scheduleCPartVFields(): Record<string, string> {
 	return fields;
 }
 
+/** Form 6781 Part I: three line 1 rows of account, loss and gain, line 2 in two columns, then lines 3 to 9 */
+function form6781Fields(): Record<string, string> {
+	const fields: Record<string, string> = { name: 'f1_01[0]', ssn: 'f1_02[0]', '2.loss': 'f1_12[0]', '2.gain': 'f1_13[0]' };
+	for (let n = 1; n <= 3; n++) {
+		fields[`1.desc.${n}`] = `f1_${String(3 * n).padStart(2, '0')}[0]`;
+		fields[`1.loss.${n}`] = `f1_${String(3 * n + 1).padStart(2, '0')}[0]`;
+		fields[`1.gain.${n}`] = `f1_${String(3 * n + 2).padStart(2, '0')}[0]`;
+	}
+	['3', '4', '5', '6', '7', '8', '9'].forEach((line, i) => (fields[line] = `f1_${14 + i}[0]`));
+	return fields;
+}
+
 /**
  * Form 8949: Part I on page 1 and Part II on page 2, each ROWS_PER_PAGE rows
  * of eight fields (description, dates, proceeds, basis, code, adjustment,
@@ -420,6 +432,13 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'27': 'f2_16[0]'
 		},
 		checks: { '12:no': 'c1_1[0]', '12:yes': 'c1_1[1]', '19:no': 'c2_1[0]', '19:yes': 'c2_1[1]', '20:no': 'c2_2[0]', '20:yes': 'c2_2[1]' }
+	},
+	f6781: {
+		file: 'f6781.pdf',
+		fields: form6781Fields(),
+		checks: { 'election:A': 'c1_1[0]', 'election:B': 'c1_2[0]', 'election:C': 'c1_3[0]', 'election:D': 'c1_4[0]' },
+		// Column (b) is headed "(Loss)" and line 2's column (b) has printed parentheses
+		parenthesized: ['1.loss.1', '1.loss.2', '1.loss.3', '2.loss']
 	},
 	f8995: {
 		file: 'f8995.pdf',

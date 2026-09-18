@@ -30,7 +30,7 @@ function form8949Boxes(box: string, description: string): FormBoxPreset[] {
 	const term = box === 'A' || box === 'B' ? 'short' : 'long';
 	const group = `Box ${box} · ${description}`;
 	return [
-		{ box, label: `Box ${box}: net gain or loss`, categoryHints: [`capital gains? - ${term} term`, '^capital gains$'], group },
+		{ box, label: `Box ${box}: net gain or loss`, categoryHints: [`^capital gains? - ${term} term`, '^capital gains$'], group },
 		{ box: `${box}.proceeds`, label: `Box ${box}: proceeds (1099-B box 1d)`, group },
 		{ box: `${box}.basis`, label: `Box ${box}: cost or other basis (1099-B box 1e)`, group },
 		{ box: `${box}.adj.W`, label: `Box ${box}: wash sale loss disallowed (1099-B box 1g)`, group }
@@ -118,11 +118,28 @@ export const FORM_PRESETS: Record<string, FormPreset> = {
 			{ box: 'C', label: 'Advance payment of premium tax credit (annual total)' }
 		]
 	},
+	// Schedule K-1 (Form 1065). Boxes 1 to 3 reach Schedule 1 line 5 through
+	// the Partnership Income category (Schedule E page 2 is not produced), 5,
+	// 6a and 6b go to Schedule B with the partnership as payer, 8 and 9a to
+	// Schedule D lines 5 and 12, and 11 code C to Form 6781, which splits it
+	// 40% short-term and 60% long-term. 13 code AE (portfolio deductions) is
+	// not deductible federally and 20 A and B are for Form 4952 only, so they
+	// take no category; the return notes them.
 	'K-1': {
 		name: 'Partner or Shareholder Share of Income',
 		boxes: [
-			{ box: '1', label: 'Ordinary business income (loss)' },
-			{ box: '2', label: 'Net rental real estate income (loss)' }
+			{ box: '1', label: 'Ordinary business income (loss)', categoryHints: ['^partnership income$'] },
+			{ box: '2', label: 'Net rental real estate income (loss)', categoryHints: ['^partnership income$'] },
+			{ box: '3', label: 'Other net rental income (loss)', categoryHints: ['^partnership income$'] },
+			{ box: '5', label: 'Interest income', categoryHints: ['^interest income$', 'interest'] },
+			{ box: '6a', label: 'Ordinary dividends', categoryHints: ['dividend.*ordinary', '^dividend income$', 'dividend'] },
+			{ box: '6b', label: 'Qualified dividends', categoryHints: ['dividend.*qualified'] },
+			{ box: '8', label: 'Net short-term capital gain (loss)', categoryHints: ['^partnership capital gains? - short term'] },
+			{ box: '9a', label: 'Net long-term capital gain (loss)', categoryHints: ['^partnership capital gains? - long term'] },
+			{ box: '11C', label: 'Other income: section 1256 contracts and straddles (Form 6781)', categoryHints: ['^section 1256'] },
+			{ box: '13AE', label: 'Other deductions: portfolio deductions (not deductible federally)' },
+			{ box: '20A', label: 'Other information: investment income (Form 4952)' },
+			{ box: '20B', label: 'Other information: investment expenses (Form 4952)' }
 		]
 	}
 };
