@@ -44,6 +44,7 @@ model Book {
   rules         Rule[]
   operationLogs OperationLog[]
   taxDocuments  TaxDocument[]
+  taxDocumentFiles TaxDocumentFile[]
   taxFacts      TaxFact[]
   businesses    Business[]
 }
@@ -203,26 +204,34 @@ model TaxDocument {
   businessId String?          // Business the form belongs to (1099-NEC, 1099-K)
   business  Business?         @relation(fields: [businessId], references: [id], onDelete: SetNull)
   notes     String?
+  fileId    String?           // The form itself, possibly shared with other documents
+  file      TaxDocumentFile?  @relation(fields: [fileId], references: [id], onDelete: SetNull)
   createdAt DateTime          @default(now())
   updatedAt DateTime          @updatedAt
 
   lines TaxDocumentLine[]
-  file  TaxDocumentFile?
 
   @@index([bookId, year])
+  @@index([fileId])
 }
 
 // The scanned or downloaded form itself (PDF or image), kept in the database
-// so backups and book exports carry it. One file per document.
+// so backups and book exports carry it. One file can hold several forms (a
+// broker's consolidated 1099 carries a 1099-DIV, a 1099-INT and a 1099-B), so
+// any number of documents point at it; it is deleted when the last one lets go.
 model TaxDocumentFile {
-  id         String      @id @default(cuid())
-  documentId String      @unique
-  document   TaxDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  filename   String
-  mimeType   String      // "application/pdf", "image/png", "image/jpeg"
-  size       Int
-  data       Bytes
-  createdAt  DateTime    @default(now())
+  id        String   @id @default(cuid())
+  bookId    String
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  filename  String
+  mimeType  String   // "application/pdf", "image/png", "image/jpeg"
+  size      Int
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  documents TaxDocument[]
+
+  @@index([bookId])
 }
 
 model TaxDocumentLine {

@@ -8,7 +8,9 @@ import {
 	deleteTaxDocument,
 	addDocumentLine,
 	deleteDocumentLine,
-	attachUploadedFile
+	attachUploadedFile,
+	linkDocumentFile,
+	listDocumentFiles
 } from '$lib/server/actions/taxDocuments';
 import { listAccounts } from '$lib/server/actions/accounts';
 import { listTaxCategories } from '$lib/server/actions/taxCategories';
@@ -36,12 +38,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	const { bookId } = locals;
 	const year = parseYear(params.year);
 
-	const [status, accounts, taxCategories, enabledModules, businessAccounts] = await Promise.all([
+	const [status, accounts, taxCategories, enabledModules, businessAccounts, files] = await Promise.all([
 		getTaxYearStatus(bookId, year),
 		listAccounts(bookId),
 		listTaxCategories(bookId),
 		getEnabledModules(bookId),
-		listBusinessAccounts(bookId)
+		listBusinessAccounts(bookId),
+		listDocumentFiles(bookId, year)
 	]);
 
 	const currentYear = new Date().getFullYear();
@@ -73,6 +76,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		accounts: accounts.map((a) => ({ id: a.id, path: a.path, type: a.type })),
 		taxCategories: taxCategories.map((c) => ({ id: c.id, name: c.name, scheduleRef: c.scheduleRef })),
 		formPresets: FORM_PRESETS,
+		// Files already attached this year, so a new document can be read from
+		// one of them (a consolidated 1099 holding several forms)
+		files,
 		availableYears: Array.from({ length: 6 }, (_, i) => currentYear - i)
 	};
 };
@@ -179,11 +185,14 @@ export const actions: Actions = {
 
 		const file = data.get('file');
 		const hasFile = file instanceof File && file.size > 0;
+		// A file already attached to another document (a consolidated 1099)
+		const fileId = (data.get('fileId') as string) || null;
 
 		try {
 			const doc = await createTaxDocument(locals.bookId, { year, formType, issuer, accountId, businessId, notes, status });
 			if (hasFile) await attachUploadedFile(doc.id, file);
-			return { success: true, documentId: doc.id, attached: hasFile };
+			else if (fileId) await linkDocumentFile(doc.id, fileId);
+			return { success: true, documentId: doc.id, attached: hasFile || !!fileId };
 		} catch (e) {
 			return fail(400, { error: (e as Error).message });
 		}

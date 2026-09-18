@@ -198,7 +198,8 @@ TAX DOCUMENTS (W-2, 1099s, 1098, 1095-A, ...)
   doc:line <doc-id> --box <box> --amount <amount> [--label <text>] [--category <id|name>] [--no-category]
   doc:line-delete <line-id>
   doc:attach <doc-id> <file>            Attach the form itself (PDF, PNG, JPEG, WebP)
-  doc:detach <doc-id>                   Remove the attached file
+  doc:attach <doc-id> --from <doc-id>   Share the file attached to another document (a consolidated 1099)
+  doc:detach <doc-id>                   Take the file off the document (kept while another document uses it)
   doc:forms                             Known form types and their boxes
 
 RULES
@@ -266,8 +267,16 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   matched (within $0.01), variance, or no transactions.
   The form itself (PDF or image) can be attached to a document
   (`doc:attach`, or the drop area when adding one on `/tax/<year>`). It is
-  stored in the database, so backups and book exports carry it. Opening a
-  document at `/tax/documents/<id>` shows the file beside the form's boxes:
+  stored in the database (`TaxDocumentFile`, a book-level record), so
+  backups and book exports carry it. One file can hold several forms: a
+  broker's consolidated 1099 is uploaded once and a 1099-DIV, a 1099-INT
+  and a 1099-B each point at it (`doc:attach <id> --from <other-id>`, the
+  "file already on hand" picker when adding a document, or "Add another
+  form from this file" on the viewer, which creates a document with the
+  same issuer, account and business). Each document's lines keep their
+  own page regions into the shared file. Detaching or deleting a document
+  leaves the file with the others; it is deleted with the last one.
+  Opening a document at `/tax/documents/<id>` shows the file beside the form's boxes:
   clicking a figure on the page (or dragging a box around one) fills the
   armed box and remembers where on the page it came from, so each line can be
   traced back to the form. Boxes can also be typed in there without a file.

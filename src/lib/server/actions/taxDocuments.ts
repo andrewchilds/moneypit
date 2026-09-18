@@ -56,7 +56,13 @@ export const DOCUMENT_FILE_TYPES: Record<string, string> = {
 
 export const MAX_DOCUMENT_FILE_BYTES = 25 * 1024 * 1024;
 
-const fileSelect = { id: true, filename: true, mimeType: true, size: true, createdAt: true };
+// A file's documents, so a consolidated statement shows every form read from it
+const fileDocumentsSelect = {
+	select: { id: true, formType: true, issuer: true, year: true },
+	orderBy: [{ formType: 'asc' as const }, { issuer: 'asc' as const }]
+};
+
+const fileSelect = { id: true, filename: true, mimeType: true, size: true, createdAt: true, documents: fileDocumentsSelect };
 
 const documentInclude = {
 	lines: { orderBy: { box: 'asc' as const }, include: { taxCategory: { select: { id: true, name: true, scheduleRef: true } } } },
@@ -147,6 +153,7 @@ export async function deleteTaxDocument(id: string) {
 	const existing = await db.taxDocument.findUnique({ where: { id }, include: { lines: true } });
 	if (!existing) throw new Error('Document not found');
 	await db.taxDocument.delete({ where: { id } });
+	if (existing.fileId) await deleteFileIfUnused(existing.fileId);
 	await logOperation(existing.bookId, 'DELETE', `Deleted ${existing.formType} from ${existing.issuer} for ${existing.year}`, [
 		...existing.lines.map((line) => ({
 			entityType: 'TaxDocumentLine' as const,
@@ -217,7 +224,11 @@ function regionFields(region: LineRegion | null) {
 	return { page, x, y, w, h };
 }
 
-/** Attach the form itself (PDF or image) to a document, replacing any earlier file. */
+/**
+ * Attach the form itself (PDF or image) to a document, replacing any earlier
+ * file. The file is a book-level record; other documents can share it with
+ * linkDocumentFile (one consolidated 1099 holding a 1099-DIV and a 1099-B).
+ */
 export async function attachDocumentFile(documentId: string, file: AttachDocumentFileData) {
 	const document = await db.taxDocument.findUnique({ where: { id: documentId } });
 	if (!document) throw new Error('Document not found');
@@ -228,20 +239,76 @@ export async function attachDocumentFile(documentId: string, file: AttachDocumen
 	if (file.data.byteLength > MAX_DOCUMENT_FILE_BYTES) throw new Error('File is larger than 25 MB');
 
 	const filename = file.filename.trim() || `${document.formType}.${DOCUMENT_FILE_TYPES[file.mimeType]}`;
-	// Replace rather than update so the file id (used as a cache key) changes,
-	// and clear regions that pointed into the old file.
-	const [, , result] = await db.$transaction([
-		db.taxDocumentFile.deleteMany({ where: { documentId } }),
-		db.taxDocumentLine.updateMany({ where: { documentId }, data: regionFields(null) }),
-		db.taxDocumentFile.create({
-			data: { documentId, filename, mimeType: file.mimeType, size: file.data.byteLength, data: file.data },
-			select: fileSelect
-		})
-	]);
+	// The same statement uploaded again (its 1099-B after its 1099-DIV) is
+	// shared rather than stored twice
+	const existing = await findIdenticalFile(document.bookId, file.data);
+	const fileId =
+		existing ??
+		(
+			await db.taxDocumentFile.create({
+				data: { bookId: document.bookId, filename, mimeType: file.mimeType, size: file.data.byteLength, data: file.data },
+				select: { id: true }
+			})
+		).id;
+	const result = await pointDocumentAtFile(documentId, document.fileId, fileId);
 	await logOperation(document.bookId, 'UPDATE', `Attached ${filename} to ${document.formType} from ${document.issuer}`, [
 		{ entityType: 'TaxDocument', entityId: documentId, before: {}, after: {} }
 	]);
 	return result;
+}
+
+/** A file in the book with exactly these bytes, if there is one. */
+async function findIdenticalFile(bookId: string, data: Uint8Array): Promise<string | null> {
+	const candidates = await db.taxDocumentFile.findMany({
+		where: { bookId, size: data.byteLength },
+		select: { id: true, data: true },
+		orderBy: { createdAt: 'asc' }
+	});
+	const match = candidates.find((c) => Buffer.from(c.data).equals(Buffer.from(data)));
+	return match?.id ?? null;
+}
+
+/**
+ * Point a document at a file already attached to another document in the
+ * book, so several forms can be read from one upload.
+ */
+export async function linkDocumentFile(documentId: string, fileId: string) {
+	const document = await db.taxDocument.findUnique({ where: { id: documentId } });
+	if (!document) throw new Error('Document not found');
+	const file = await db.taxDocumentFile.findUnique({ where: { id: fileId }, select: { id: true, bookId: true, filename: true } });
+	if (!file || file.bookId !== document.bookId) throw new Error('File not found in this book');
+	if (document.fileId === file.id) return getDocumentFileInfo(file.id);
+
+	const result = await pointDocumentAtFile(documentId, document.fileId, file.id);
+	await logOperation(document.bookId, 'UPDATE', `Linked ${file.filename} to ${document.formType} from ${document.issuer}`, [
+		{ entityType: 'TaxDocument', entityId: documentId, before: {}, after: {} }
+	]);
+	return result;
+}
+
+/**
+ * Switch a document from one file to another (either may be null). Regions
+ * pointed into the old file, so they are cleared; the old file goes when no
+ * document uses it any more.
+ */
+async function pointDocumentAtFile(documentId: string, previousFileId: string | null, fileId: string | null) {
+	await db.$transaction([
+		db.taxDocument.update({ where: { id: documentId }, data: { fileId } }),
+		db.taxDocumentLine.updateMany({ where: { documentId }, data: regionFields(null) })
+	]);
+	if (previousFileId && previousFileId !== fileId) await deleteFileIfUnused(previousFileId);
+	return fileId ? getDocumentFileInfo(fileId) : null;
+}
+
+async function deleteFileIfUnused(fileId: string) {
+	const inUse = await db.taxDocument.count({ where: { fileId } });
+	if (inUse === 0) await db.taxDocumentFile.deleteMany({ where: { id: fileId } });
+}
+
+async function getDocumentFileInfo(fileId: string) {
+	const file = await db.taxDocumentFile.findUnique({ where: { id: fileId }, select: fileSelect });
+	if (!file) throw new Error('File not found');
+	return file;
 }
 
 const EXTENSION_TYPES: Record<string, string> = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
@@ -259,15 +326,15 @@ export async function attachUploadedFile(documentId: string, file: File) {
 	return attachDocumentFile(documentId, { filename: file.name, mimeType: documentFileType(file.name, file.type), data });
 }
 
-/** Remove the attached file. Lines keep their amounts but lose their regions. */
+/**
+ * Take the file off a document. Lines keep their amounts but lose their
+ * regions. The file itself stays while another document still uses it.
+ */
 export async function detachDocumentFile(documentId: string) {
 	const document = await db.taxDocument.findUnique({ where: { id: documentId }, include: { file: { select: fileSelect } } });
 	if (!document) throw new Error('Document not found');
 	if (!document.file) throw new Error('Document has no file attached');
-	await db.$transaction([
-		db.taxDocumentFile.delete({ where: { documentId } }),
-		db.taxDocumentLine.updateMany({ where: { documentId }, data: regionFields(null) })
-	]);
+	await pointDocumentAtFile(documentId, document.file.id, null);
 	await logOperation(document.bookId, 'UPDATE', `Removed ${document.file.filename} from ${document.formType} from ${document.issuer}`, [
 		{ entityType: 'TaxDocument', entityId: documentId, before: {}, after: {} }
 	]);
@@ -275,7 +342,22 @@ export async function detachDocumentFile(documentId: string) {
 
 /** The attached file with its bytes, for serving or exporting. */
 export async function getDocumentFile(documentId: string) {
-	return db.taxDocumentFile.findUnique({ where: { documentId } });
+	const document = await db.taxDocument.findUnique({ where: { id: documentId }, select: { fileId: true } });
+	if (!document?.fileId) return null;
+	return db.taxDocumentFile.findUnique({ where: { id: document.fileId } });
+}
+
+/**
+ * The files attached to a book's documents (for a year, when given), each
+ * with the documents read from it, so a new document can pick one already
+ * on hand instead of uploading it again.
+ */
+export async function listDocumentFiles(bookId: string, year?: number) {
+	return db.taxDocumentFile.findMany({
+		where: { bookId, ...(year !== undefined ? { documents: { some: { year } } } : {}) },
+		select: fileSelect,
+		orderBy: [{ filename: 'asc' }, { createdAt: 'asc' }]
+	});
 }
 
 export async function deleteDocumentLine(lineId: string) {

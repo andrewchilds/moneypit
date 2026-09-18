@@ -645,7 +645,16 @@ async function main() {
 			case "doc:attach": {
 				const id = positional[0];
 				const filePath = positional[1];
-				if (!id || !filePath) throw new Error("Usage: doc:attach <doc-id> <file>");
+				if (id && opts.from) {
+					// Share the file already attached to another document (a
+					// consolidated 1099 that holds several forms)
+					const source = await taxDocuments.getTaxDocument(opts.from as string);
+					if (!source) throw new Error(`Document not found: ${opts.from}`);
+					if (!source.file) throw new Error(`Document ${source.id} has no file attached`);
+					json(await taxDocuments.linkDocumentFile(id, source.file.id));
+					break;
+				}
+				if (!id || !filePath) throw new Error("Usage: doc:attach <doc-id> <file> | doc:attach <doc-id> --from <doc-id>");
 				const data = new Uint8Array(fs.readFileSync(filePath));
 				const filename = path.basename(filePath);
 				const file = await taxDocuments.attachDocumentFile(id, {

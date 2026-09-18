@@ -1,4 +1,4 @@
-import { error, fail } from '@sveltejs/kit';
+import { error, fail, redirect, isRedirect } from '@sveltejs/kit';
 import {
 	getTaxDocument,
 	updateTaxDocument,
@@ -6,6 +6,9 @@ import {
 	deleteDocumentLine,
 	attachUploadedFile,
 	detachDocumentFile,
+	linkDocumentFile,
+	listDocumentFiles,
+	createTaxDocument,
 	type LineRegion
 } from '$lib/server/actions/taxDocuments';
 import { listTaxCategories } from '$lib/server/actions/taxCategories';
@@ -19,7 +22,8 @@ async function loadDocument(id: string, bookId: string) {
 }
 
 export const load: PageServerLoad = async ({ params, locals }) => {
-	const [doc, taxCategories] = await Promise.all([loadDocument(params.id, locals.bookId), listTaxCategories(locals.bookId)]);
+	const doc = await loadDocument(params.id, locals.bookId);
+	const [taxCategories, files] = await Promise.all([listTaxCategories(locals.bookId), listDocumentFiles(locals.bookId, doc.year)]);
 	return {
 		document: {
 			...doc,
@@ -27,7 +31,11 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			lines: doc.lines.map((l) => ({ ...l, amount: Number(l.amount) }))
 		},
 		preset: FORM_PRESETS[doc.formType] ?? null,
-		taxCategories: taxCategories.map((c) => ({ id: c.id, name: c.name, scheduleRef: c.scheduleRef }))
+		taxCategories: taxCategories.map((c) => ({ id: c.id, name: c.name, scheduleRef: c.scheduleRef })),
+		// Files on other documents this year, so this one can be read from
+		// an upload already on hand (a consolidated 1099)
+		otherFiles: files.filter((f) => f.id !== doc.file?.id),
+		formTypes: Object.entries(FORM_PRESETS).map(([formType, preset]) => ({ formType, name: preset.name }))
 	};
 };
 
@@ -88,6 +96,44 @@ export const actions: Actions = {
 			await attachUploadedFile(params.id, file);
 			return { success: true };
 		} catch (e) {
+			return fail(400, { error: (e as Error).message });
+		}
+	},
+
+	// Read this document from a file already attached to another one
+	linkFile: async ({ params, request, locals }) => {
+		await loadDocument(params.id, locals.bookId);
+		const data = await request.formData();
+		const fileId = data.get('fileId') as string;
+		if (!fileId) return fail(400, { error: 'Choose a file' });
+		try {
+			await linkDocumentFile(params.id, fileId);
+			return { success: true };
+		} catch (e) {
+			return fail(400, { error: (e as Error).message });
+		}
+	},
+
+	// Another form on the same file: a new document, same issuer, account
+	// and business, sharing this one's file
+	addFromFile: async ({ params, request, locals }) => {
+		const doc = await loadDocument(params.id, locals.bookId);
+		if (!doc.file) return fail(400, { error: 'This document has no file to share' });
+		const data = await request.formData();
+		const formType = data.get('formType') as string;
+		if (!formType?.trim()) return fail(400, { error: 'Form type is required' });
+		try {
+			const created = await createTaxDocument(locals.bookId, {
+				year: doc.year,
+				formType,
+				issuer: doc.issuer,
+				accountId: doc.accountId,
+				businessId: doc.businessId
+			});
+			await linkDocumentFile(created.id, doc.file.id);
+			throw redirect(303, `/tax/documents/${created.id}`);
+		} catch (e) {
+			if (isRedirect(e)) throw e;
 			return fail(400, { error: (e as Error).message });
 		}
 	},

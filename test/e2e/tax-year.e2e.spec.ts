@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import fs from 'node:fs';
 import { runMpWithBook, runMpJsonWithBook, createTestBook, deleteTestBook, resetTestBookId } from './setup';
 
 interface Account {
@@ -369,6 +370,94 @@ describe('Document files', () => {
 		runMpJsonWithBook<DocumentFile>(`doc:attach ${doc.id} test/fixtures/1099-int.pdf`, bookId);
 		runMpWithBook(`doc:delete ${doc.id}`, bookId);
 		expect(runMpWithBook(`doc:get ${doc.id}`, bookId).exitCode).not.toBe(0);
+	});
+});
+
+describe('One file holding several forms', () => {
+	interface SharedFile {
+		id: string;
+		filename: string;
+		size: number;
+		documents: { id: string; formType: string; issuer: string; year: number }[];
+	}
+	interface DocumentWithFile extends TaxDocument {
+		file: SharedFile | null;
+		lines: (TaxDocument['lines'][number] & { page: number | null })[];
+	}
+
+	let dividends: TaxDocument;
+	let sales: TaxDocument;
+	let fileId: string;
+
+	beforeAll(() => {
+		dividends = runMpJsonWithBook<TaxDocument>('doc:add --form 1099-div --issuer "Consolidated Broker" --year 2024', bookId);
+		sales = runMpJsonWithBook<TaxDocument>('doc:add --form 1099-b --issuer "Consolidated Broker" --year 2024', bookId);
+		fileId = runMpJsonWithBook<SharedFile>(`doc:attach ${dividends.id} test/fixtures/1099-int.pdf`, bookId).id;
+	});
+
+	it('links a second document to the file attached to the first', () => {
+		const file = runMpJsonWithBook<SharedFile>(`doc:attach ${sales.id} --from ${dividends.id}`, bookId);
+		expect(file.id).toBe(fileId);
+		expect(file.documents.map((d) => d.formType).sort()).toEqual(['1099-B', '1099-DIV']);
+
+		const fetched = runMpJsonWithBook<DocumentWithFile>(`doc:get ${sales.id}`, bookId);
+		expect(fetched.file?.id).toBe(fileId);
+		expect(fetched.file?.documents.length).toBe(2);
+	});
+
+	it('refuses to share from a document with no file', () => {
+		const bare = runMpJsonWithBook<TaxDocument>('doc:add --form 1099-int --issuer "Consolidated Broker" --year 2024', bookId);
+		const result = runMpWithBook(`doc:attach ${sales.id} --from ${bare.id}`, bookId);
+		expect(result.exitCode).not.toBe(0);
+		expect(result.stderr + result.stdout).toMatch(/no file attached/);
+		runMpWithBook(`doc:delete ${bare.id}`, bookId);
+	});
+
+	it('exports the file once and imports it shared', () => {
+		const path = `/tmp/moneypit-shared-file-${Date.now()}.json`;
+		runMpWithBook(`book:export ${path}`, bookId);
+		const exported = JSON.parse(fs.readFileSync(path, 'utf-8')) as {
+			taxDocumentFiles: { id: string }[];
+			taxDocuments: { issuer: string; fileId: string | null }[];
+		};
+		expect(exported.taxDocumentFiles.filter((f) => f.id === fileId).length).toBe(1);
+		expect(exported.taxDocuments.filter((d) => d.fileId === fileId).length).toBe(2);
+
+		const { stdout } = runMpWithBook(`book:import ${path} --name "Shared File Import ${Date.now()}"`, bookId);
+		const importedId = stdout.match(/\(([a-z0-9]+)\)/)![1];
+		const docs = runMpJsonWithBook<DocumentWithFile[]>('doc:list --year 2024', importedId).filter(
+			(d) => d.issuer === 'Consolidated Broker'
+		);
+		expect(docs.length).toBe(2);
+		expect(docs[0].file?.id).toBe(docs[1].file?.id);
+		expect(docs[0].file?.documents.length).toBe(2);
+		deleteTestBook(importedId);
+		fs.unlinkSync(path);
+	});
+
+	it('keeps the file when one document lets go, and drops it with the last', () => {
+		runMpJsonWithBook<DocumentLine>(`doc:line ${sales.id} --box ST --amount -12.5`, bookId);
+		expect(runMpWithBook(`doc:detach ${sales.id}`, bookId).stdout).toContain('Removed file');
+		const remaining = runMpJsonWithBook<DocumentWithFile>(`doc:get ${dividends.id}`, bookId);
+		expect(remaining.file?.id).toBe(fileId);
+		expect(remaining.file?.documents.length).toBe(1);
+
+		// Re-share, then delete the other document: the file survives on the one left
+		runMpJsonWithBook<SharedFile>(`doc:attach ${sales.id} --from ${dividends.id}`, bookId);
+		runMpWithBook(`doc:delete ${dividends.id}`, bookId);
+		const last = runMpJsonWithBook<DocumentWithFile>(`doc:get ${sales.id}`, bookId);
+		expect(last.file?.id).toBe(fileId);
+		expect(last.file?.documents.length).toBe(1);
+
+		// Replacing the file on the last document releases the shared one
+		const replaced = runMpJsonWithBook<SharedFile>(`doc:attach ${sales.id} test/fixtures/1099-int.png`, bookId);
+		expect(replaced.id).not.toBe(fileId);
+		const exportedPath = `/tmp/moneypit-released-file-${Date.now()}.json`;
+		runMpWithBook(`book:export ${exportedPath}`, bookId);
+		const exported = JSON.parse(fs.readFileSync(exportedPath, 'utf-8')) as { taxDocumentFiles: { id: string }[] };
+		expect(exported.taxDocumentFiles.some((f) => f.id === fileId)).toBe(false);
+		fs.unlinkSync(exportedPath);
+		runMpWithBook(`doc:delete ${sales.id}`, bookId);
 	});
 });
 

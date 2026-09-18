@@ -16,6 +16,8 @@
 	const lineFor = (box: string) => doc.lines.find((l) => l.box.toLowerCase() === box.toLowerCase());
 	const extraLines = $derived(doc.lines.filter((l) => !presetBoxes.some((b) => b.box.toLowerCase() === l.box.toLowerCase())));
 	const fileUrl = $derived(doc.file ? `/tax/documents/${doc.id}/file?v=${doc.file.id}` : null);
+	// Other forms read from the same file (a consolidated 1099)
+	const siblings = $derived(doc.file?.documents.filter((d) => d.id !== doc.id) ?? []);
 
 	// Every row the sidebar shows: preset boxes first, then any others on the document
 	const rows = $derived([
@@ -236,8 +238,31 @@
 				{#if doc.account}<span class="muted">· {doc.account.path}</span>{/if}
 				{#if doc.business}<span class="business-tag"><Briefcase size={12} /> {doc.business.name}</span>{/if}
 			</h1>
+			{#if siblings.length > 0}
+				<p class="siblings muted small">
+					Also in this file:
+					{#each siblings as sibling (sibling.id)}
+						<a href="/tax/documents/{sibling.id}"><span class="mono">{sibling.formType}</span> {sibling.issuer}</a>
+					{/each}
+				</p>
+			{/if}
 		</div>
 		<div class="header-actions">
+			{#if doc.file}
+				<form method="POST" action="?/addFromFile" use:enhance>
+					<select
+						class="add-form-select"
+						name="formType"
+						title="Add another form read from this file"
+						onchange={(e) => (e.currentTarget as HTMLSelectElement).form?.requestSubmit()}
+					>
+						<option value="">Add another form from this file…</option>
+						{#each data.formTypes as t (t.formType)}
+							<option value={t.formType}>{t.formType} · {t.name}</option>
+						{/each}
+					</select>
+				</form>
+			{/if}
 			<form
 				method="POST"
 				action="?/attachFile"
@@ -255,8 +280,11 @@
 				</label>
 			</form>
 			{#if doc.file}
-				<form method="POST" action="?/removeFile" use:enhance>
-					<Button variant="ghost" size="sm" type="submit"><X size={14} /> Remove file</Button>
+				<form method="POST" action="?/removeFile" use:enhance title={siblings.length > 0 ? "The file stays with the other forms read from it" : undefined}>
+					<Button variant="ghost" size="sm" type="submit">
+						<X size={14} />
+						{siblings.length > 0 ? "Unlink file" : "Remove file"}
+					</Button>
 				</form>
 			{/if}
 		</div>
@@ -339,6 +367,16 @@
 							onchange={() => (document.getElementById("attach-form") as HTMLFormElement | null)?.requestSubmit()}
 						/>
 					</label>
+					{#if data.otherFiles.length > 0}
+						<form method="POST" action="?/linkFile" use:enhance>
+							<select name="fileId" class="add-form-select" onchange={(e) => (e.currentTarget as HTMLSelectElement).form?.requestSubmit()}>
+								<option value="">Or read it from a file already on hand…</option>
+								{#each data.otherFiles as file (file.id)}
+									<option value={file.id}>{file.filename} · {file.documents.map((d) => `${d.formType} ${d.issuer}`).join(", ")}</option>
+								{/each}
+							</select>
+						</form>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -505,6 +543,28 @@
 		display: flex;
 		align-items: center;
 		gap: var(--spacing-sm);
+	}
+
+	.siblings {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--spacing-sm);
+		margin: 0;
+	}
+
+	.siblings a {
+		color: var(--color-primary);
+		text-decoration: none;
+	}
+
+	.add-form-select {
+		max-width: 260px;
+		padding: 6px 8px;
+		font-size: 13px;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg);
+		color: var(--color-text);
 	}
 
 	.file-button {

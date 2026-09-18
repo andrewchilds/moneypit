@@ -22,9 +22,19 @@ export interface BookExport {
 	enabledModules: string[];
 	// Added later; absent in older exports
 	taxDocuments?: ExportedTaxDocument[];
+	// The attached forms, base64-encoded, each shared by the documents whose
+	// fileId names it. Added later; older exports carry a file per document
+	taxDocumentFiles?: ExportedTaxDocumentFile[];
 	taxFacts?: ExportedTaxFact[];
 	businesses?: ExportedBusiness[];
 	businessAccounts?: ExportedBusinessAccount[];
+}
+
+interface ExportedTaxDocumentFile {
+	id: string;
+	filename: string;
+	mimeType: string;
+	data: string;
 }
 
 interface ExportedBusiness {
@@ -53,7 +63,9 @@ interface ExportedTaxDocument {
 		w?: number | null;
 		h?: number | null;
 	}[];
-	// The attached form, base64-encoded. Added later; absent in older exports
+	// The attached form in taxDocumentFiles. Added later; absent in older exports
+	fileId?: string | null;
+	// The attached form inline, base64-encoded: the shape of older exports
 	file?: {
 		filename: string;
 		mimeType: string;
@@ -151,7 +163,8 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 				}
 			},
 			taxModules: true,
-			taxDocuments: { include: { lines: true, file: true } },
+			taxDocuments: { include: { lines: true } },
+			taxDocumentFiles: true,
 			taxFacts: true,
 			businesses: { orderBy: { createdAt: 'asc' }, include: { accounts: true } }
 		}
@@ -262,9 +275,13 @@ export async function exportBook(bookId: string): Promise<BookExport> {
 				w: l.w,
 				h: l.h
 			})),
-			file: d.file
-				? { filename: d.file.filename, mimeType: d.file.mimeType, data: Buffer.from(d.file.data).toString('base64') }
-				: null
+			fileId: d.fileId
+		})),
+		taxDocumentFiles: book.taxDocumentFiles.map((f) => ({
+			id: f.id,
+			filename: f.filename,
+			mimeType: f.mimeType,
+			data: Buffer.from(f.data).toString('base64')
 		})),
 		taxFacts: book.taxFacts.map((f) => ({ year: f.year, key: f.key, value: f.value, businessId: f.businessId })),
 		businesses: book.businesses.map((b) => ({ id: b.id, name: b.name })),
@@ -482,9 +499,38 @@ export async function importBook(
 		});
 	}
 
-	// 9. Create tax documents and facts
+	// 9. Create tax documents and facts. Files come first so documents can
+	// share them; an older export carries each document's file inline.
+	const fileIdMap = new Map<string, string>();
+	for (const f of data.taxDocumentFiles ?? []) {
+		const created = await db.taxDocumentFile.create({
+			data: {
+				bookId: newBook.id,
+				filename: f.filename,
+				mimeType: f.mimeType,
+				data: Buffer.from(f.data, 'base64'),
+				size: Buffer.byteLength(f.data, 'base64')
+			},
+			select: { id: true }
+		});
+		fileIdMap.set(f.id, created.id);
+	}
 	const taxDocuments = data.taxDocuments ?? [];
 	for (const d of taxDocuments) {
+		let fileId = d.fileId ? (fileIdMap.get(d.fileId) ?? null) : null;
+		if (!fileId && d.file) {
+			const created = await db.taxDocumentFile.create({
+				data: {
+					bookId: newBook.id,
+					filename: d.file.filename,
+					mimeType: d.file.mimeType,
+					data: Buffer.from(d.file.data, 'base64'),
+					size: Buffer.byteLength(d.file.data, 'base64')
+				},
+				select: { id: true }
+			});
+			fileId = created.id;
+		}
 		await db.taxDocument.create({
 			data: {
 				bookId: newBook.id,
@@ -508,18 +554,7 @@ export async function importBook(
 						h: l.h ?? null
 					}))
 				},
-				...(d.file
-					? {
-							file: {
-								create: {
-									filename: d.file.filename,
-									mimeType: d.file.mimeType,
-									data: Buffer.from(d.file.data, 'base64'),
-									size: Buffer.byteLength(d.file.data, 'base64')
-								}
-							}
-						}
-					: {})
+				fileId
 			}
 		});
 	}

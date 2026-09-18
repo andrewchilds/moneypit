@@ -28,6 +28,15 @@
 
 	let newFile = $state<File | null>(null);
 	let newFileInput = $state<HTMLInputElement | undefined>();
+	// A file already on another document, instead of a fresh upload
+	let newFileId = $state("");
+
+	/** "Ally-1099.pdf · 1099-B, 1099-DIV" for a file picker option */
+	const fileOptionLabel = (file: PageData["files"][number]) =>
+		`${file.filename} · ${file.documents.map((d) => `${d.formType} ${d.issuer}`).join(", ")}`;
+	/** The other documents read from the same file as this one */
+	const sharedWith = (doc: PageData["status"]["documents"][number]) =>
+		doc.file?.documents.filter((d) => d.id !== doc.id) ?? [];
 
 	function openAddDocument(expected?: Expected) {
 		newFormType = expected?.formType ?? "";
@@ -36,6 +45,7 @@
 		newBusinessId = expected?.businessId ?? "";
 		newStatus = "RECEIVED";
 		newFile = null;
+		newFileId = "";
 		if (newFileInput) newFileInput.value = "";
 		showAddDocument = true;
 	}
@@ -491,7 +501,14 @@
 							<p class="hint">{doc.notes}</p>
 						{/if}
 						{#if doc.file}
-							<p class="hint file-hint"><FileText size={12} /> {doc.file.filename}</p>
+							{@const others = sharedWith(doc)}
+							<p class="hint file-hint">
+								<FileText size={12} />
+								{doc.file.filename}
+								{#if others.length > 0}
+									<span>· also holds {others.map((d) => d.formType).join(", ")}</span>
+								{/if}
+							</p>
 						{/if}
 					</div>
 					<div class="document-actions">
@@ -612,6 +629,18 @@
 				<input type="file" name="file" accept="application/pdf,image/*" bind:this={newFileInput} onchange={onNewFileChange} />
 			</label>
 		</div>
+		{#if data.files.length > 0 && !newFile}
+			<div class="form-group">
+				<label for="new-file-id">Or a file already on hand</label>
+				<select id="new-file-id" name="fileId" bind:value={newFileId}>
+					<option value="">—</option>
+					{#each data.files as file (file.id)}
+						<option value={file.id}>{fileOptionLabel(file)}</option>
+					{/each}
+				</select>
+				<span class="hint">A consolidated statement can hold several forms; this one is read from the same file.</span>
+			</div>
+		{/if}
 		<div class="form-group">
 			<label for="new-form-type">Form type</label>
 			<input id="new-form-type" name="formType" list="form-types" bind:value={newFormType} required placeholder="1099-INT" />

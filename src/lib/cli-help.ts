@@ -90,7 +90,8 @@ TAX DOCUMENTS (W-2, 1099s, 1098, 1095-A, ...)
   doc:line <doc-id> --box <box> --amount <amount> [--label <text>] [--category <id|name>] [--no-category]
   doc:line-delete <line-id>
   doc:attach <doc-id> <file>            Attach the form itself (PDF, PNG, JPEG, WebP)
-  doc:detach <doc-id>                   Remove the attached file
+  doc:attach <doc-id> --from <doc-id>   Share the file attached to another document (a consolidated 1099)
+  doc:detach <doc-id>                   Take the file off the document (kept while another document uses it)
   doc:forms                             Known form types and their boxes
 
   --year defaults to the most recently completed calendar year.
