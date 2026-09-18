@@ -8,6 +8,7 @@
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import Button from "$lib/components/ui/Button.svelte";
+	import Tooltip from "$lib/components/ui/Tooltip.svelte";
 	import Modal from "$lib/components/ui/Modal.svelte";
 	import type { PageData, ActionData, SubmitFunction } from "./$types";
 
@@ -242,15 +243,7 @@
 	const reconciliationOf = (lineId: string) => data.status.reconciliations.find((r) => r.lineId === lineId);
 	const untiedOf = (docId: string) => data.status.untied.find((u) => u.documentId === docId);
 	const listPaths = (paths: string[]) => (paths.length <= 3 ? paths.join(", ") : `${paths.slice(0, 3).join(", ")} and ${paths.length - 3} more`);
-	// The account chip's tooltip on a document tied to no account: what its boxes replace
-	function untiedTitle(untied: PageData["status"]["untied"][number]): string {
-		const lines = untied.categories.map((c) =>
-			c.bookTotal !== 0
-				? `Its ${c.taxCategoryName} figure replaces the whole ${formatCurrency(c.bookTotal)} the books have there, from ${listPaths(c.accounts.map((a) => a.path))}.`
-				: `Its ${c.taxCategoryName} figure replaces the whole category; the books have nothing there this year.`
-		);
-		return ["Not tied to an account.", ...lines, "Click to tie it to one so it replaces only that account's figure."].join("\n");
-	}
+	type Untied = PageData["status"]["untied"][number];
 	const reconciliationLabel = { matched: "Matched", variance: "Variance", no_transactions: "No transactions" } as const;
 	const reconciliationIcon = { matched: CircleCheck, variance: CircleAlert, no_transactions: CircleDashed } as const;
 	let shownReconciliation = $state<Reconciliation | null>(null);
@@ -639,6 +632,18 @@
 	{/if}
 </div>
 
+{#snippet untiedTip(untied: Untied)}
+	<p><strong>Not tied to an account.</strong></p>
+	{#each untied.categories as c (c.taxCategoryId)}
+		{#if c.bookTotal !== 0}
+			<p>Its {c.taxCategoryName} figure replaces the whole {formatCurrency(c.bookTotal)} the books have there, from {listPaths(c.accounts.map((a) => a.path))}.</p>
+		{:else}
+			<p>Its {c.taxCategoryName} figure replaces the whole category; the books have nothing there this year.</p>
+		{/if}
+	{/each}
+	<p>Click to tie it to one so it replaces only that account's figure.</p>
+{/snippet}
+
 {#snippet formCard(doc: Doc, nested: boolean)}
 			{@const untied = untiedOf(doc.id)}
 			<section class="form-card" class:nested={nested} id="doc-{doc.id}" class:na={doc.status === "NOT_APPLICABLE"}>
@@ -660,21 +665,21 @@
 								{/each}
 							</select>
 						{:else}
-							<button
-								type="button"
-								class="chip"
-								class:unset={!doc.account}
-								class:warn={!!untied}
-								title={doc.account
-									? "Tied to this account: the document replaces the book total from it. Click to change."
-									: untied
-										? untiedTitle(untied)
-										: "Tied to no account: the document replaces the whole category. Click to tie it to one."}
-								onclick={() => (editingAccountDocId = doc.id)}
-							>
-								{#if untied}<TriangleAlert size={12} />{:else}<Link2 size={12} />{/if}
-								{doc.account?.path ?? "no account"}
-							</button>
+							<Tooltip>
+								<button type="button" class="chip" class:unset={!doc.account} class:warn={!!untied} onclick={() => (editingAccountDocId = doc.id)}>
+									{#if untied}<TriangleAlert size={12} />{:else}<Link2 size={12} />{/if}
+									{doc.account?.path ?? "no account"}
+								</button>
+								{#snippet content()}
+									{#if doc.account}
+										<p>Tied to this account: the document replaces the book total from it. Click to change.</p>
+									{:else if untied}
+										{@render untiedTip(untied)}
+									{:else}
+										<p>Tied to no account: the document replaces the whole category. Click to tie it to one.</p>
+									{/if}
+								{/snippet}
+							</Tooltip>
 						{/if}
 						{#if doc.business}
 							<span class="business-tag"><Briefcase size={12} /> {doc.business.name}</span>

@@ -260,8 +260,10 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   account has no transactions in the category also replaces the category (a
   1098's real estate taxes box). A received document with no account is
   flagged as untied (`untied` in `tax:status`, a yellow "no account" chip
-  on the Documents tab whose tooltip carries the warning, a banner on the
-  viewer): the warning names
+  on the Documents tab whose tooltip (`Tooltip` in
+  `src/lib/components/ui`, a styled popup on hover or focus taking `text`
+  or a `content` snippet) carries the warning, a banner on the viewer):
+  the warning names
   each category its boxes land on and the book activity there by
   counterparty account, since the whole of it is replaced. Forms whose
   category has no book transactions (a 1099-R, a K-1) lose nothing
