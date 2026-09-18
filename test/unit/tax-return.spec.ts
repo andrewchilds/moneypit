@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'bun:test';
-import { computeReturn, bracketTax, earnedIncomeCredit, qualifiedDividendsAndCapitalGainTax, type ReturnInput, type BusinessInput, type DependentInput } from '$lib/server/taxReturn/compute';
+import {
+	computeReturn,
+	bracketTax,
+	capitalLossCarryover,
+	earnedIncomeCredit,
+	qualifiedDividendsAndCapitalGainTax,
+	type ReturnInput,
+	type BusinessInput,
+	type DependentInput
+} from '$lib/server/taxReturn/compute';
 import { getTaxYearConstants } from '$lib/server/taxReturn/constants';
 import { formatFormAmount, shouldPrint } from '$lib/server/taxReturn/pdf';
 
@@ -21,6 +30,7 @@ function business(overrides: Partial<BusinessInput> = {}): BusinessInput {
 			{ line: '17', category: 'Legal & Professional', amount: 5000 }
 		],
 		sepContribution: 0,
+		homeOfficeCarryover: { fromLastYear: 0, toNextYear: 0 },
 		...overrides
 	};
 }
@@ -64,6 +74,7 @@ function input(overrides: Partial<ReturnInput> = {}): ReturnInput {
 		withholding: { w2: 0, forms1099: 0 },
 		estimatedPayments: 0,
 		extensionPayment: 0,
+		carryovers: { capitalLossShort: 0, capitalLossLong: 0, qbiLoss: 0, nol: 0 },
 		notes: [],
 		...overrides
 	};
@@ -278,7 +289,9 @@ describe('computeReturn', () => {
 		expect(line(r, 'f1040sb', '4')).toBe(650.5);
 		expect(line(r, 'f1040sb', '6')).toBe(2000);
 		// 4,500 lost, 3,000 used against 50,000 of income, 1,500 carries forward
-		expect(r.warnings.some((w) => w.includes('3,000.00 is used this year') && w.includes('1,500.00 carries forward to 2026'))).toBe(true);
+		const carry = r.carryovers.find((c) => c.key === 'capital_loss_carryover_short');
+		expect(carry?.amount).toBe(1500);
+		expect(carry?.detail).toContain('3,000.00 is used this year');
 	});
 
 	it('carries the whole capital loss forward when income is already below zero', () => {
@@ -286,7 +299,9 @@ describe('computeReturn', () => {
 		expect(line(r, 'f1040', '7')).toBe(-3000);
 		expect(r.summary.taxableIncome).toBe(0);
 		// Taxable income before the loss is 5,000 − 15,750 = −10,750, so none of the 3,000 is used
-		expect(r.warnings.some((w) => w.includes('0.00 is used this year') && w.includes('8,000.00 carries forward'))).toBe(true);
+		const carry = r.carryovers.find((c) => c.key === 'capital_loss_carryover_short');
+		expect(carry?.amount).toBe(8000);
+		expect(carry?.detail).toContain('0.00 is used this year');
 	});
 
 	it('puts capital gain distributions on Schedule D line 13 as long-term gain', () => {
@@ -490,7 +505,7 @@ describe('self-employment deductions', () => {
 		expect(line(r, 'f8995', '16')).toBe(0);
 		const loss = computeReturn(input({ businesses: [business({ income: [], expenses: [{ line: '8', category: 'Advertising', amount: 5000 }] })] }), c2025);
 		expect(line(loss, 'f8995', '16')).toBe(-5000);
-		expect(loss.warnings.some((w) => w.includes('5,000.00 carries forward'))).toBe(true);
+		expect(loss.carryovers.find((c) => c.key === 'qbi_loss_carryforward')?.amount).toBe(5000);
 	});
 
 	it('lists other expenses in Schedule C Part V', () => {
@@ -512,6 +527,108 @@ describe('self-employment deductions', () => {
 		expect(line(r, 'f1040', '4a')).toBe(30000);
 		expect(line(r, 'f1040', '4b')).toBe(0);
 		expect(r.warnings.some((w) => w.includes('Form 8606'))).toBe(true);
+	});
+});
+
+describe('carryovers', () => {
+	const carryover = (r: ReturnType<typeof computeReturn>, key: string, businessId?: string) =>
+		r.carryovers.find((c) => c.key === key && (businessId === undefined || c.businessId === businessId));
+
+	it('runs the Capital Loss Carryover Worksheet on the 2024 filed figures', () => {
+		// 2024 as filed: short-term −17,293, long-term 5,349, the −3,000 limit,
+		// and taxable income below zero before the loss, so none of it is used
+		const w = capitalLossCarryover(-5000, 3000, -17293, 5349);
+		expect(w).toEqual({ short: 11944, long: 0, used: 0, taxableIncome: -5000 });
+	});
+
+	it('uses the loss up to taxable income and carries the rest, short-term first', () => {
+		// Taxable income 31,250 before the loss: the whole 3,000 is used
+		expect(capitalLossCarryover(31250, 3000, -10000, 0)).toEqual({ short: 7000, long: 0, used: 3000, taxableIncome: 31250 });
+		// A long-term loss with a short-term gain: the gain absorbs part of it
+		expect(capitalLossCarryover(50000, 3000, 2000, -9000)).toEqual({ short: 0, long: 4000, used: 3000, taxableIncome: 50000 });
+		// Only 1,000 of taxable income before the loss: 1,000 used, 2,000 of the deduction gives no benefit
+		expect(capitalLossCarryover(-2000, 3000, -4000, 0)).toEqual({ short: 3000, long: 0, used: 1000, taxableIncome: -2000 });
+	});
+
+	it('reports next year’s capital loss carryover instead of a warning', () => {
+		// Interest 5,000, short −17,293, long 5,349 (single): AGI 2,000, taxable income negative before the loss
+		const r = computeReturn(input({ interest: { taxable: [{ name: 'Bank', amount: 5000 }], taxExempt: 0 }, capitalGains: { shortTerm: -17293, longTerm: 5349, distributions: 0 } }), c2025);
+		expect(line(r, 'f1040sd', '16')).toBe(-11944);
+		expect(line(r, 'f1040sd', '21')).toBe(-3000);
+		expect(line(r, 'f1040', '11')).toBe(2000);
+		expect(carryover(r, 'capital_loss_carryover_short')?.amount).toBe(11944);
+		expect(carryover(r, 'capital_loss_carryover_long')?.amount).toBe(0);
+		expect(carryover(r, 'capital_loss_carryover_short')?.detail).toContain('0.00 is used this year');
+		expect(r.warnings.some((w) => w.includes('not tracked'))).toBe(false);
+	});
+
+	it('puts last year’s capital loss carryover on Schedule D lines 6 and 14', () => {
+		const r = computeReturn(input({ wages: 60000, carryovers: { capitalLossShort: 11944, capitalLossLong: 500, qbiLoss: 0, nol: 0 } }), c2025);
+		expect(line(r, 'f1040sd', '6')).toBe(-11944);
+		expect(line(r, 'f1040sd', '7')).toBe(-11944);
+		expect(line(r, 'f1040sd', '14')).toBe(-500);
+		expect(line(r, 'f1040sd', '15')).toBe(-500);
+		expect(line(r, 'f1040sd', '16')).toBe(-12444);
+		expect(line(r, 'f1040', '7')).toBe(-3000);
+		// 3,000 used against the short-term loss first
+		expect(carryover(r, 'capital_loss_carryover_short')?.amount).toBe(8944);
+		expect(carryover(r, 'capital_loss_carryover_long')?.amount).toBe(500);
+	});
+
+	it('lists a used-up carryover at zero', () => {
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 5000, longTerm: 0, distributions: 0 }, carryovers: { capitalLossShort: 1000, capitalLossLong: 0, qbiLoss: 0, nol: 0 } }), c2025);
+		expect(line(r, 'f1040sd', '16')).toBe(4000);
+		expect(carryover(r, 'capital_loss_carryover_short')?.amount).toBe(0);
+		expect(carryover(r, 'capital_loss_carryover_short')?.detail).toContain('used up');
+	});
+
+	it('has no carryover entries when nothing carries', () => {
+		const r = computeReturn(input({ wages: 60000, capitalGains: { shortTerm: 5000, longTerm: 0, distributions: 0 } }), c2025);
+		expect(r.carryovers).toEqual([]);
+	});
+
+	it('takes the qualified business loss carryforward on Form 8995 line 3', () => {
+		const r = computeReturn(input({ businesses: [business()], carryovers: { capitalLossShort: 0, capitalLossLong: 0, qbiLoss: 5000, nol: 0 } }), c2025);
+		const f2 = line(r, 'f8995', '2')!;
+		expect(line(r, 'f8995', '3')).toBe(-5000);
+		expect(line(r, 'f8995', '4')).toBe(f2 - 5000);
+		expect(line(r, 'f8995', '16')).toBe(0);
+		expect(carryover(r, 'qbi_loss_carryforward')?.amount).toBe(0);
+	});
+
+	it('carries a qualified business loss forward', () => {
+		const r = computeReturn(input({ wages: 50000, businesses: [business({ income: [{ line: '1', category: 'Gross Receipts', amount: 1000 }] })], carryovers: { capitalLossShort: 0, capitalLossLong: 0, qbiLoss: 2000, nol: 0 } }), c2025);
+		// Profit 1,000 − 20,000 = −19,000, plus last year's −2,000
+		expect(line(r, 'f8995', '2')).toBe(-19000);
+		expect(line(r, 'f8995', '16')).toBe(-21000);
+		expect(carryover(r, 'qbi_loss_carryforward')?.amount).toBe(21000);
+		expect(line(r, 'f8995', '15')).toBe(0);
+	});
+
+	it('deducts a net operating loss carryforward on Schedule 1 line 8a', () => {
+		const r = computeReturn(input({ wages: 60000, carryovers: { capitalLossShort: 0, capitalLossLong: 0, qbiLoss: 0, nol: 4000 } }), c2025);
+		expect(line(r, 'f1040s1', '8a')).toBe(-4000);
+		expect(line(r, 'f1040s1', '9')).toBe(-4000);
+		expect(line(r, 'f1040s1', '10')).toBe(-4000);
+		expect(line(r, 'f1040', '11')).toBe(56000);
+		expect(r.warnings.some((w) => w.includes('80% of taxable income'))).toBe(true);
+	});
+
+	it('reports each business’s home office carryover', () => {
+		const r = computeReturn(
+			input({
+				businesses: [
+					business({ id: 'b1', name: 'Consulting', homeOfficeCarryover: { fromLastYear: 0, toNextYear: 1392.31 } }),
+					business({ id: 'b2', name: 'Design', homeOfficeCarryover: { fromLastYear: 300, toNextYear: 0 } }),
+					business({ id: 'b3', name: 'Shop', homeOfficeCarryover: { fromLastYear: 0, toNextYear: 0 } })
+				]
+			}),
+			c2025
+		);
+		expect(carryover(r, 'home_office_carryover', 'b1')?.amount).toBe(1392.31);
+		expect(carryover(r, 'home_office_carryover', 'b2')?.amount).toBe(0);
+		expect(carryover(r, 'home_office_carryover', 'b2')?.detail).toContain('300.00');
+		expect(carryover(r, 'home_office_carryover', 'b3')).toBeUndefined();
 	});
 });
 

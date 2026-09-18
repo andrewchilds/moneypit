@@ -160,6 +160,8 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 				.map((c) => ({ line: lineOf(c.scheduleRef) ?? '', category: c.taxCategoryName, amount: c.reportedTotal }))
 				.filter((f) => f.line !== '' && f.amount !== 0);
 		const method = asText(answers.get('accounting_method'));
+		// The home office worksheet already deducted last year's carryover and figured this year's
+		const homeOffice = report.worksheets.find((w) => w.worksheetId === 'home-office' && w.businessId === section.businessId);
 		return {
 			id: section.businessId,
 			name: section.businessName,
@@ -170,7 +172,11 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 			accountingMethod: method === 'cash' || method === 'accrual' ? method : null,
 			income: figures(section.incomeCategories),
 			expenses: figures(section.expenseCategories),
-			sepContribution: asNumber(answers.get('sep_contribution'))
+			sepContribution: asNumber(answers.get('sep_contribution')),
+			homeOfficeCarryover: {
+				fromLastYear: asNumber(answers.get('home_office_carryover')),
+				toNextYear: homeOffice?.breakdown.find((r) => r.kind === 'carryover')?.amount ?? 0
+			}
 		};
 	});
 
@@ -258,6 +264,12 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 		withholding,
 		estimatedPayments: asNumber(book.get('federal_estimated_payments')),
 		extensionPayment: book.get('extension_filed') === true ? asNumber(book.get('extension_payment')) : 0,
+		carryovers: {
+			capitalLossShort: asNumber(book.get('capital_loss_carryover_short')),
+			capitalLossLong: asNumber(book.get('capital_loss_carryover_long')),
+			qbiLoss: asNumber(book.get('qbi_loss_carryforward')),
+			nol: asNumber(book.get('nol_carryforward'))
+		},
 		notes
 	};
 

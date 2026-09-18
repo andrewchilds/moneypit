@@ -8,10 +8,12 @@
  * additional Medicare tax, net investment income tax), Schedule 3 (an
  * extension payment), Schedules A, B and D, Schedule 8812 (the child tax
  * credit and its refundable part), Schedule EIC and the earned income
- * credit, and Form 1040 through the refund or amount owed. What is not:
- * other credits, the alternative minimum tax, depreciation, carryovers from
- * prior years, and the other deductions on Schedule 1-A. Each gap that could
- * apply is listed in `warnings`.
+ * credit, and Form 1040 through the refund or amount owed. Carryovers from
+ * last year's return come in as answers (capital loss, qualified business
+ * loss, net operating loss, home office) and next year's figures go out as
+ * `carryovers`. What is not computed: other credits, the alternative minimum
+ * tax, depreciation, and the other deductions on Schedule 1-A. Each gap that
+ * could apply is listed in `warnings`.
  */
 
 import { FILING_STATUS_LABELS, type FilingStatus, type TaxYearConstants } from './constants';
@@ -42,6 +44,24 @@ export interface BusinessInput {
 	income: ScheduleLineFigure[];
 	expenses: ScheduleLineFigure[];
 	sepContribution: number;
+	/**
+	 * Home office operating expenses the gross income limit disallowed: last
+	 * year's, deducted this year through the worksheet, and this year's,
+	 * carried to next year (Form 8829 lines 25 and 43).
+	 */
+	homeOfficeCarryover: { fromLastYear: number; toNextYear: number };
+}
+
+/** Carryovers from last year's return, as positive amounts */
+export interface CarryoverInput {
+	/** Schedule D line 6 */
+	capitalLossShort: number;
+	/** Schedule D line 14 */
+	capitalLossLong: number;
+	/** Form 8995 line 3 */
+	qbiLoss: number;
+	/** Schedule 1 line 8a */
+	nol: number;
 }
 
 export interface ReturnIdentity {
@@ -113,6 +133,7 @@ export interface ReturnInput {
 	withholding: { w2: number; forms1099: number };
 	estimatedPayments: number;
 	extensionPayment: number;
+	carryovers: CarryoverInput;
 	/** Things noticed while assembling the input, carried into the warnings */
 	notes: string[];
 }
@@ -158,16 +179,29 @@ export interface ReturnSummary {
 	effectiveRate: number;
 }
 
+/** A figure this return carries to next year's, and the question that records it there */
+export interface Carryover {
+	key: string;
+	label: string;
+	/** A positive amount, as the question takes it */
+	amount: number;
+	businessId: string | null;
+	businessName: string | null;
+	detail: string;
+}
+
 export interface ReturnComputation {
 	year: number;
 	filingStatus: FilingStatus;
 	filingStatusLabel: string;
 	forms: ReturnForm[];
 	summary: ReturnSummary;
+	/** Next year's carryovers, zero when a carryover came in and was used up */
+	carryovers: Carryover[];
 	warnings: string[];
 }
 
-const round2 = (n: number) => Math.round(n * 100) / 100;
+const round2 = (n: number) => Math.round(n * 100) / 100 || 0;
 const money = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (r: number) => `${round2(r * 100)}%`;
 const sum = (ns: number[]) => round2(ns.reduce((a, b) => a + b, 0));
@@ -284,6 +318,35 @@ export function earnedIncomeCredit(
 		detail: `${children}: ${pct(row.rate)} of earned income ${money(earnedIncome)} up to ${money(row.maxCredit)}${reduction ? `, less ${pct(row.phaseOutRate)} of the ${money(base)} over ${money(start)}` : ''}, from the EIC table`
 	};
 }
+
+/**
+ * The Capital Loss Carryover Worksheet from the Schedule D instructions.
+ * `taxableIncome` is Form 1040 line 15 allowed to go negative, `lossAllowed`
+ * the positive amount of the loss on Schedule D line 21, and the net
+ * short- and long-term figures are Schedule D lines 7 and 15.
+ */
+export function capitalLossCarryover(
+	taxableIncome: number,
+	lossAllowed: number,
+	netShortTerm: number,
+	netLongTerm: number
+): { short: number; long: number; used: number; taxableIncome: number } {
+	const w3 = Math.max(0, round2(taxableIncome + lossAllowed));
+	const w4 = Math.min(lossAllowed, w3);
+	const w5 = Math.max(0, -netShortTerm);
+	const w6 = Math.max(0, netLongTerm);
+	const w7 = round2(w4 + w6);
+	const w8 = Math.max(0, round2(w5 - w7));
+	const w9 = Math.max(0, -netLongTerm);
+	const w10 = Math.max(0, netShortTerm);
+	const w11 = Math.max(0, round2(w4 - w5));
+	const w12 = round2(w10 + w11);
+	const w13 = Math.max(0, round2(w9 - w12));
+	return { short: w8, long: w13, used: w4, taxableIncome };
+}
+
+/** The order the carryovers are listed in, whatever order the forms produced them */
+const CARRYOVER_ORDER = ['capital_loss_carryover_short', 'capital_loss_carryover_long', 'qbi_loss_carryforward', 'home_office_carryover'];
 
 const SCHEDULE_C_EXPENSE_LINES = [
 	['8', 'Advertising'],
@@ -411,6 +474,7 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	if (constants.year !== input.year) warnings.push(`Using ${constants.year} tax tables for ${input.year}.`);
 
 	const forms: ReturnForm[] = [];
+	const carryovers: Carryover[] = [];
 	const married = status === 'mfj' || status === 'mfs' || status === 'qss';
 
 	// Schedule C, one per business, in the name of whoever owns it
@@ -540,19 +604,26 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	let line7 = 0;
 	let netLongTermGain = 0;
 	let netCapital = 0;
+	let netShortTerm = 0;
+	let netLongTerm = 0;
 	let scheduleD: FormBuilder | null = null;
 	const { shortTerm, longTerm, distributions } = input.capitalGains;
-	if (shortTerm !== 0 || longTerm !== 0 || distributions !== 0) {
+	const carry = input.carryovers;
+	if (shortTerm !== 0 || longTerm !== 0 || distributions !== 0 || carry.capitalLossShort !== 0 || carry.capitalLossLong !== 0) {
 		scheduleD = new FormBuilder('f1040sd', 'Schedule D', 'Capital Gains and Losses');
 		scheduleD.text('name', 'Name(s) shown on return', `${id.firstName} ${id.lastName}`.trim());
 		scheduleD.text('ssn', 'Your social security number', id.ssn);
 		scheduleD.amount('1a', 'Short-term totals from Form 1099-B (gain or loss)', shortTerm, 'input');
-		const d7 = scheduleD.amount('7', 'Net short-term capital gain or loss', shortTerm, 'total');
+		const d6 = scheduleD.amount('6', 'Short-term capital loss carryover', -Math.abs(carry.capitalLossShort), 'input', `From last year's Capital Loss Carryover Worksheet`);
+		const d7 = scheduleD.amount('7', 'Net short-term capital gain or loss', shortTerm + d6, 'total', 'Lines 1a through 6');
 		scheduleD.amount('8a', 'Long-term totals from Form 1099-B (gain or loss)', longTerm, 'input');
 		const d13 = scheduleD.amount('13', 'Capital gain distributions', distributions, 'input', 'Box 2a of the 1099-DIVs; always long-term');
-		const d15 = scheduleD.amount('15', 'Net long-term capital gain or loss', longTerm + d13, 'total', 'Lines 8a through 14');
+		const d14 = scheduleD.amount('14', 'Long-term capital loss carryover', -Math.abs(carry.capitalLossLong), 'input', `From last year's Capital Loss Carryover Worksheet`);
+		const d15 = scheduleD.amount('15', 'Net long-term capital gain or loss', longTerm + d13 + d14, 'total', 'Lines 8a through 14');
 		const d16 = scheduleD.amount('16', 'Combine lines 7 and 15', d7 + d15, 'total');
 		netCapital = d16;
+		netShortTerm = d7;
+		netLongTerm = d15;
 		const limit = constants.capitalLossLimit[status];
 		if (d16 < 0) {
 			line7 = scheduleD.amount('21', `Loss limited to $${limit.toLocaleString('en-US')}`, Math.max(d16, -limit), 'result');
@@ -577,9 +648,17 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	s1.amount('5', 'Rental real estate, royalties, partnerships (Schedule E)', input.scheduleENet + s1On('5'), 'input');
 	if (input.scheduleENet !== 0) warnings.push('Schedule E net is carried to Schedule 1 line 5, but Schedule E itself is not produced.');
 	s1.amount('7', 'Unemployment compensation', input.unemployment + s1On('7'), 'input');
-	const s1Other = ['2a', '4', '6', '8z'].map((l) => s1.amount(l, `Line ${l}`, s1On(l), 'input'));
-	const s1Line9 = s1.amount('9', 'Total other income', s1On('8z') + s1On('9'));
-	const s1Line10 = s1.amount('10', 'Additional income', s1.get('1') + s1.get('3') + s1.get('5') + s1.get('7') + s1Other[0] + s1Other[1] + s1Other[2] + s1Line9, 'total');
+	const s1Other = ['2a', '4', '6'].map((l) => s1.amount(l, `Line ${l}`, s1On(l), 'input'));
+	const nol = Math.abs(carry.nol);
+	const s1Line8a = s1.amount('8a', 'Net operating loss deduction', -nol + s1On('8a'), 'input', nol ? 'Carried forward from prior years, as answered' : undefined);
+	if (nol > 0) {
+		warnings.push(
+			`The ${money(nol)} net operating loss carryforward is deducted in full on Schedule 1 line 8a; the limit of 80% of taxable income before the deduction (Form 172 Schedule B) is not applied.`
+		);
+	}
+	const s1Line8z = s1.amount('8z', 'Line 8z', s1On('8z'), 'input');
+	const s1Line9 = s1.amount('9', 'Total other income', s1Line8a + s1Line8z + s1On('9'), 'computed', 'Lines 8a through 8z');
+	const s1Line10 = s1.amount('10', 'Additional income', s1.get('1') + s1.get('3') + s1.get('5') + s1.get('7') + sum(s1Other) + s1Line9, 'total');
 	const sep = sum(input.businesses.map((b) => b.sepContribution));
 	s1.amount('15', 'Deductible part of self-employment tax', seDeduction, 'input');
 	s1.amount('16', 'Self-employed SEP, SIMPLE, and qualified plans', sep + s1On('16'), 'input');
@@ -701,7 +780,8 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		});
 		if (scheduleCs.length > rows.length) warnings.push('Form 8995 lists five businesses; the rest are in the total only.');
 		const f2 = f.amount('2', 'Total qualified business income', qbiTotal, 'total');
-		const f4 = f.amount('4', 'Total qualified business income (not below zero)', Math.max(0, f2));
+		const f3 = f.amount('3', 'Qualified business net loss carryforward from the prior year', -Math.abs(carry.qbiLoss), 'input', `Last year's Form 8995 line 16, as answered`);
+		const f4 = f.amount('4', 'Total qualified business income (not below zero)', Math.max(0, f2 + f3), 'computed', 'Lines 2 and 3');
 		const f5 = f.amount('5', `Qualified business income component (${pct(q.rate)})`, f4 * q.rate);
 		const f10 = f.amount('10', 'QBI deduction before the income limitation', f5);
 		const f11 = f.amount('11', 'Taxable income before the QBI deduction', taxableBeforeQbi, 'input');
@@ -722,8 +802,17 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 			);
 		}
 		qbiDeduction = f.amount('15', 'Qualified business income deduction', deduction, 'result');
-		const f16 = f.amount('16', 'Total qualified business (loss) carryforward', Math.min(0, f2), 'result');
-		if (f16 < 0) warnings.push(`Qualified business loss of ${money(-f16)} carries forward to next year's Form 8995 line 3 (not tracked).`);
+		const f16 = f.amount('16', 'Total qualified business (loss) carryforward', Math.min(0, f2 + f3), 'result', 'Lines 2 and 3, if a loss');
+		if (f16 < 0 || carry.qbiLoss !== 0) {
+			carryovers.push({
+				key: 'qbi_loss_carryforward',
+				label: 'Qualified business loss carryforward',
+				amount: Math.abs(f16),
+				businessId: null,
+				businessName: null,
+				detail: f16 < 0 ? `Form 8995 line 16: qualified business income of ${money(f2)}${f3 ? ` and last year's ${money(-f3)} carryforward` : ''} net to a loss` : `Last year's ${money(-f3)} carryforward was absorbed by this year's qualified business income`
+			});
+		}
 		f8995 = f;
 	}
 
@@ -731,14 +820,18 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	f1040.amount('13a', 'Qualified business income deduction from Form 8995', qbiDeduction, 'input');
 	const line14 = f1040.amount('14', 'Add lines 12e, 13a, and 13b', line12 + qbiDeduction);
 	const taxable = f1040.amount('15', 'Taxable income', Math.max(0, agi - line14), 'total');
-	if (netCapital < -constants.capitalLossLimit[status]) {
-		// Capital Loss Carryover Worksheet: only as much of the loss as offsets income is used up
-		const w1 = round2(agi - line14);
-		const w2 = -line7;
-		const used = Math.max(0, Math.min(w2, round2(w1 + w2)));
-		const carry = round2(-netCapital - used);
-		warnings.push(
-			`Capital loss of ${money(-netCapital)}: ${money(used)} is used this year${used < w2 ? ` (taxable income is ${money(w1)} before it, so the rest of the deduction gives no benefit)` : ''} and ${money(carry)} carries forward to ${input.year + 1} (not tracked).`
+	if (scheduleD && (netCapital < 0 || carry.capitalLossShort !== 0 || carry.capitalLossLong !== 0)) {
+		// Capital Loss Carryover Worksheet (Schedule D instructions): only as
+		// much of the loss as offsets income is used up; the rest carries
+		// forward, short-term first
+		const w = netCapital < 0 ? capitalLossCarryover(round2(agi - line14), -line7, netShortTerm, netLongTerm) : { short: 0, long: 0, used: 0, taxableIncome: 0 };
+		const detail =
+			netCapital < 0
+				? `Capital Loss Carryover Worksheet: of the ${money(-netCapital)} loss, ${money(w.used)} is used this year${w.used < -line7 ? ` (taxable income before it is ${money(w.taxableIncome)}, so the rest of the ${money(-line7)} deduction gives no benefit)` : ''}`
+				: 'Schedule D shows a net gain, so last year’s carryover is used up';
+		carryovers.push(
+			{ key: 'capital_loss_carryover_short', label: 'Short-term capital loss carryover', amount: w.short, businessId: null, businessName: null, detail },
+			{ key: 'capital_loss_carryover_long', label: 'Long-term capital loss carryover', amount: w.long, businessId: null, businessName: null, detail: netCapital < 0 ? 'The long-term part, from the same worksheet' : detail }
 		);
 	}
 	const usePreferential = qualifiedDividends > 0 || netLongTermGain > 0;
@@ -925,7 +1018,22 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	f1040.amount('35a', 'Amount of line 34 you want refunded to you', refund, 'result');
 	const owed = f1040.amount('37', 'Amount you owe', Math.max(0, totalTax - totalPayments), 'result');
 	if (owed > 0 && owed >= 1000) warnings.push('Amount owed is $1,000 or more; an underpayment penalty (Form 2210) may apply and is not computed.');
-	warnings.push('Not computed: alternative minimum tax, credits other than the child tax credit and earned income credit, deductions on Schedule 1-A, prior-year carryovers, and depreciation.');
+	warnings.push('Not computed: alternative minimum tax, credits other than the child tax credit and earned income credit, deductions on Schedule 1-A, the charitable contribution carryover, and depreciation.');
+
+	// Home office expenses the gross income limit disallowed, per business
+	for (const b of input.businesses) {
+		const { fromLastYear, toNextYear } = b.homeOfficeCarryover;
+		if (toNextYear <= 0 && fromLastYear <= 0) continue;
+		carryovers.push({
+			key: 'home_office_carryover',
+			label: 'Home office operating expenses carried over',
+			amount: toNextYear,
+			businessId: b.id,
+			businessName: b.name,
+			detail: toNextYear > 0 ? 'Form 8829 line 43: allowable home expenses over the gross income limit of the business' : `Last year's ${money(fromLastYear)} carryover was deducted in full this year`
+		});
+	}
+
 
 	// Schedule B lists payers when there is any interest or dividend income
 	let scheduleB: FormBuilder | null = null;
@@ -968,6 +1076,7 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		filingStatus: status,
 		filingStatusLabel: FILING_STATUS_LABELS[status],
 		forms,
+		carryovers: carryovers.sort((a, b) => CARRYOVER_ORDER.indexOf(a.key) - CARRYOVER_ORDER.indexOf(b.key)),
 		summary: {
 			totalIncome: line9,
 			adjustedGrossIncome: agi,

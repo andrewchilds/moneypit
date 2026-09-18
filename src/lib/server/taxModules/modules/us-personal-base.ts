@@ -162,6 +162,32 @@ export const usPersonalBase: TaxModule = {
 			type: 'amount',
 			carryForward: true,
 			description: 'Needed on Form 8606 for any Roth withdrawal before age 59½'
+		},
+		// Carryovers from last year's return, as positive amounts. The draft
+		// return reports next year's figures with the fact:set lines to record them.
+		{
+			key: 'capital_loss_carryover_short',
+			prompt: 'Short-term capital loss carried over from last year',
+			type: 'amount',
+			description: 'From last year’s Capital Loss Carryover Worksheet (Schedule D instructions); goes on Schedule D line 6. Enter as a positive amount'
+		},
+		{
+			key: 'capital_loss_carryover_long',
+			prompt: 'Long-term capital loss carried over from last year',
+			type: 'amount',
+			description: 'From the same worksheet; goes on Schedule D line 14. Enter as a positive amount'
+		},
+		{
+			key: 'qbi_loss_carryforward',
+			prompt: 'Qualified business loss carried forward from last year',
+			type: 'amount',
+			description: 'Last year’s Form 8995 line 16 (or Form 8995-A line 40); goes on Form 8995 line 3. Enter as a positive amount, or 0 if last year had no Form 8995'
+		},
+		{
+			key: 'nol_carryforward',
+			prompt: 'Net operating loss carried forward from prior years',
+			type: 'amount',
+			description: 'The NOL deduction on Schedule 1 line 8a. Enter as a positive amount'
 		}
 	],
 	expectedDocuments: [

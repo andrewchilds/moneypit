@@ -395,8 +395,25 @@ business `business_owner`, `accounting_method` and `sep_contribution`) fill
 the rest. Meals on Schedule C line 24b are halved; a category on
 "Schedule C Line 27" lands on 27b. Every line carries a `detail` with its
 math, and `warnings` list what the computation could not do (AMT, credits
-other than the child tax credit and EIC, Schedule 1-A deductions, carryovers,
-Form 8995-A above the QBI threshold, a state refund on a 1099-G).
+other than the child tax credit and EIC, Schedule 1-A deductions, the
+charitable carryover, Form 8995-A above the QBI threshold, a state refund on
+a 1099-G).
+
+Carryovers from last year's return are year-keyed answers, entered as
+positive amounts: `capital_loss_carryover_short` and `_long` (Schedule D
+lines 6 and 14), `qbi_loss_carryforward` (Form 8995 line 3) and
+`nol_carryforward` (Schedule 1 line 8a, deducted in full with a warning that
+the 80% limit is not applied) on `us-personal-base`, and per business
+`home_office_carryover` on `us-schedule-c` (last year's Form 8829 line 43,
+which the home office worksheet adds to the allowable expenses under the
+same gross income limit). The computation runs the Capital Loss Carryover
+Worksheet and lists next year's figures in `carryovers` (capital loss
+short and long, qualified business loss, home office per business; a
+carryover that came in and was used up is listed at zero): `return:show`
+prints them as a "Carryovers to <year+1>" block with the `fact:set` line
+that records each, and `/reports/tax/return` shows the same table. The
+PDF field maps mark lines whose parentheses are pre-printed on the form
+(`parenthesized`) so a loss prints without a second pair.
 
 Year-specific figures live in `src/lib/server/taxReturn/constants.ts`, one
 table per year (2024 and 2025 so far), including the EIC and additional

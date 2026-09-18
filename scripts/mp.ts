@@ -842,6 +842,15 @@ async function main() {
 						if (line.detail) console.log(`             ${line.detail}`);
 					}
 				}
+				if (computation.carryovers.length > 0) {
+					console.log(`\nCarryovers to ${year + 1} (record them with the commands shown):`);
+					for (const c of computation.carryovers) {
+						const label = c.businessName ? `${c.label} — ${c.businessName}` : c.label;
+						console.log(`  ${label.padEnd(69)} ${money(c.amount).padStart(14)}`);
+						console.log(`             ${c.detail}`);
+						console.log(`             bin/mp fact:set ${c.key} ${c.amount} --year ${year + 1}${c.businessId ? ` --business ${c.businessId}` : ""}`);
+					}
+				}
 				if (computation.warnings.length > 0) {
 					console.log("\nCheck before filing:");
 					for (const w of computation.warnings) console.log(`  - ${w}`);

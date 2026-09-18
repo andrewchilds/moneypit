@@ -13,14 +13,15 @@ function asNumber(value: FactValue | undefined): number | null {
 }
 
 /**
- * Form 8829, simplified: the office's share of whole-home costs, limited to
- * the business's gross income less its other expenses. No depreciation.
+ * Form 8829, simplified: the office's share of whole-home costs plus last
+ * year's carryover, limited to the business's gross income less its other
+ * expenses. No depreciation.
  */
 export const homeOfficeWorksheet: TaxWorksheet = {
 	id: 'home-office',
 	name: 'Business use of home',
 	description: 'Allocates whole-home costs to the office by square footage, limited to the gross income of the business (Form 8829)',
-	facts: ['home_office', 'home_office_sqft', 'home_total_sqft', 'home_office_accounts'],
+	facts: ['home_office', 'home_office_sqft', 'home_total_sqft', 'home_office_accounts', 'home_office_carryover'],
 	compute({ facts, accounts, section }) {
 		if (facts.home_office !== true) return null;
 		const office = asNumber(facts.home_office_sqft);
@@ -49,6 +50,13 @@ export const homeOfficeWorksheet: TaxWorksheet = {
 				share: ratio
 			});
 		}
+		// Last year's disallowed operating expenses (Form 8829 line 25) are
+		// deductible this year under the same limit
+		const priorCarryover = Math.max(0, asNumber(facts.home_office_carryover) ?? 0);
+		if (priorCarryover > 0) {
+			breakdown.push({ label: 'Operating expenses carried over from last year', detail: 'Form 8829 line 25', amount: priorCarryover, kind: 'input' });
+			allowable = round2(allowable + priorCarryover);
+		}
 		breakdown.push({ label: 'Allowable home expenses', amount: allowable, kind: 'subtotal' });
 
 		const limit = Math.max(0, round2(section.income - section.expenses));
@@ -63,7 +71,7 @@ export const homeOfficeWorksheet: TaxWorksheet = {
 		const carryover = round2(allowable - deduction);
 		breakdown.push({ label: 'Home office deduction (Schedule C Line 30)', amount: deduction, kind: 'result' });
 		if (carryover > 0) {
-			breakdown.push({ label: 'Disallowed, carried over to next year', amount: carryover, kind: 'carryover' });
+			breakdown.push({ label: 'Disallowed, carried over to next year', detail: 'Form 8829 line 43', amount: carryover, kind: 'carryover' });
 		}
 
 		return { lines: [{ category: 'Home Office', amount: deduction }], breakdown };
@@ -210,6 +218,13 @@ export const usScheduleC: TaxModule = {
 				'Rent, utilities, insurance: the office share of each year total goes on Schedule C Line 30. Leave phone and internet to the business card, where a personal account is attached at a percentage, so nothing is counted twice',
 			type: 'accounts',
 			dependsOn: { key: 'home_office', value: true }
+		},
+		{
+			key: 'home_office_carryover',
+			prompt: 'Home office operating expenses carried over from last year',
+			type: 'amount',
+			dependsOn: { key: 'home_office', value: true },
+			description: 'Last year’s Form 8829 line 43 for this business: expenses the gross income limit disallowed, deductible this year under the same limit. Enter as a positive amount'
 		},
 		{
 			key: 'sep_contribution',

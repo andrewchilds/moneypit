@@ -38,6 +38,20 @@ describe('home office worksheet', () => {
 		expect(result!.breakdown.find((r) => r.kind === 'carryover')?.amount).toBe(1392.31);
 	});
 
+	it('deducts last year’s carryover under the same limit', () => {
+		const withCarryover = { ...facts, home_office_carryover: 1392.31 };
+		// Room for it all: 3,892.31 allocated plus 1,392.31 carried over
+		const full = homeOfficeWorksheet.compute({ facts: withCarryover, accounts, shares: [], section: { income: 50000, expenses: 5000 } });
+		expect(full!.breakdown.find((r) => r.label.startsWith('Operating expenses carried over'))?.amount).toBe(1392.31);
+		expect(full!.breakdown.find((r) => r.kind === 'subtotal')?.amount).toBe(5284.62);
+		expect(full!.lines[0].amount).toBe(5284.62);
+		expect(full!.breakdown.some((r) => r.kind === 'carryover')).toBe(false);
+		// Limited again: 4,000 allowed, the rest carries to next year
+		const limited = homeOfficeWorksheet.compute({ facts: withCarryover, accounts, shares: [], section: { income: 4000, expenses: 0 } });
+		expect(limited!.lines[0].amount).toBe(4000);
+		expect(limited!.breakdown.find((r) => r.kind === 'carryover')?.amount).toBe(1284.62);
+	});
+
 	it('allows nothing when the business already shows a loss', () => {
 		const result = homeOfficeWorksheet.compute({ facts, accounts, shares: [], section: { income: 500, expenses: 7000 } });
 		expect(result!.lines[0].amount).toBe(0);

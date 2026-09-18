@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronRight, ChevronDown, AlertTriangle, Download, Briefcase, FileText, DollarSign, Receipt, Info } from "lucide-svelte";
+	import { ChevronRight, ChevronDown, AlertTriangle, ArrowRight, Download, Briefcase, FileText, DollarSign, Receipt, Info } from "lucide-svelte";
 	import StatCard from "$lib/components/StatCard.svelte";
 	import StatsGrid from "$lib/components/StatsGrid.svelte";
 	import { goto } from "$app/navigation";
@@ -111,6 +111,37 @@
 			<span>Payments {formatCurrencyPrecise(computation.summary.totalPayments)}</span>
 			<span>Effective rate {computation.summary.effectiveRate}% of AGI</span>
 		</div>
+
+		{#if computation.carryovers.length > 0}
+			<section class="report-section carryover-section">
+				<h2><ArrowRight size={18} /> Carryovers to {data.year + 1}</h2>
+				<p class="section-note">
+					Next year's return starts from these. Record each as the answer shown on the {data.year + 1} tax prep page, or with the command.
+				</p>
+				<table class="tax-table">
+					<thead>
+						<tr>
+							<th>Item</th>
+							<th class="amount">Amount</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each computation.carryovers as c (c.key + (c.businessId ?? ""))}
+							<tr class="line-row">
+								<td>
+									<div class="line-label">
+										<span>{c.label}{#if c.businessName} <span class="business-tag"><Briefcase size={14} /> {c.businessName}</span>{/if}</span>
+										<span class="line-detail">{c.detail}</span>
+										<code class="record-as">fact:set {c.key} {c.amount} --year {data.year + 1}{c.businessId ? ` --business ${c.businessId}` : ""}</code>
+									</div>
+								</td>
+								<td class="amount">{formatCurrencyPrecise(c.amount)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</section>
+		{/if}
 
 		{#if computation.warnings.length > 0}
 			<section class="report-section notes-section">
@@ -284,6 +315,18 @@
 	.notes-section {
 		background: var(--color-info-light);
 		border-color: var(--color-info);
+	}
+
+	.section-note {
+		margin: var(--spacing-sm) 0 0;
+		color: var(--color-text-muted);
+		font-size: 14px;
+	}
+
+	.record-as {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--color-text-muted);
 	}
 
 	.warnings {

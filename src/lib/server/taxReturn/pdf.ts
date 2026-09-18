@@ -20,6 +20,8 @@ interface FormFieldMap {
 	file: string;
 	fields: Record<string, string | string[]>;
 	checks: Record<string, string>;
+	/** Lines whose parentheses are pre-printed on the form, so a loss prints without its own */
+	parenthesized?: string[];
 }
 
 const seq = (prefix: string, from: number, count: number, step = 1, pad = 2): string[] =>
@@ -166,6 +168,7 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'5': 'f1_09[0]',
 			'6': 'f1_10[0]',
 			'7': 'f1_12[0]',
+			'8a': 'f1_13[0]',
 			'8z': 'f1_36[0]',
 			'9': 'f1_37[0]',
 			'10': 'f1_38[0]',
@@ -183,7 +186,8 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'23': 'f2_15[0]',
 			'26': 'f2_30[0]'
 		},
-		checks: {}
+		checks: {},
+		parenthesized: ['8a']
 	},
 	f1040s2: {
 		file: 'f1040s2.pdf',
@@ -270,8 +274,21 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 	},
 	f1040sd: {
 		file: 'f1040sd.pdf',
-		fields: { name: 'f1_1[0]', ssn: 'f1_2[0]', '1a': 'f1_6[0]', '7': 'f1_22[0]', '8a': 'f1_26[0]', '13': 'f1_41[0]', '15': 'f1_43[0]', '16': 'f2_1[0]', '21': 'f2_4[0]' },
-		checks: {}
+		fields: {
+			name: 'f1_1[0]',
+			ssn: 'f1_2[0]',
+			'1a': 'f1_6[0]',
+			'6': 'f1_21[0]',
+			'7': 'f1_22[0]',
+			'8a': 'f1_26[0]',
+			'13': 'f1_41[0]',
+			'14': 'f1_42[0]',
+			'15': 'f1_43[0]',
+			'16': 'f2_1[0]',
+			'21': 'f2_4[0]'
+		},
+		checks: {},
+		parenthesized: ['6', '14', '21']
 	},
 	f1040sse: {
 		file: 'f1040sse.pdf',
@@ -360,6 +377,7 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'1v.name': 'f1_15[0]',
 			'1v.qbi': 'f1_17[0]',
 			'2': 'f1_18[0]',
+			'3': 'f1_19[0]',
 			'4': 'f1_20[0]',
 			'5': 'f1_21[0]',
 			'10': 'f1_26[0]',
@@ -370,7 +388,8 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 			'15': 'f1_31[0]',
 			'16': 'f1_32[0]'
 		},
-		checks: {}
+		checks: {},
+		parenthesized: ['3', '16']
 	}
 };
 
@@ -424,7 +443,8 @@ async function fillForm(form: ReturnForm, map: FormFieldMap, year: number): Prom
 		if (!shouldPrint(line)) continue;
 		const suffix = map.fields[line.line];
 		if (!suffix) continue;
-		const value = line.kind === 'text' ? (line.text ?? '') : formatFormAmount(line.amount ?? 0);
+		const amount = map.parenthesized?.includes(line.line) ? Math.abs(line.amount ?? 0) : (line.amount ?? 0);
+		const value = line.kind === 'text' ? (line.text ?? '') : formatFormAmount(amount);
 		if (Array.isArray(suffix)) {
 			// One character per field, as a year of birth is entered
 			const chars = value.replace(/[^A-Za-z0-9]/g, '');
