@@ -57,6 +57,7 @@
 	let zoom = $state(1);
 	let pdf: PDFDocumentProxy | null = null;
 	let container: HTMLDivElement;
+	let pagesEl: HTMLDivElement;
 	let pageEls: HTMLDivElement[] = [];
 	let canvases: HTMLCanvasElement[] = [];
 	let observer: IntersectionObserver | null = null;
@@ -155,9 +156,31 @@
 		}, 150);
 	}
 
-	function setZoom(next: number) {
-		zoom = Math.min(3, Math.max(0.5, Math.round(next * 4) / 4));
+	/** Zoom around the middle of the viewport: the point of the document at its center stays there. */
+	async function setZoom(next: number) {
+		const level = Math.min(3, Math.max(0.5, Math.round(next * 4) / 4));
+		if (level === zoom) return;
+		const anchor = viewportAnchor();
+		zoom = level;
+		await tick();
+		if (anchor) scrollToAnchor(anchor);
 		rerenderSoon();
+	}
+
+	/** Where the viewport's center falls on the pages, as fractions of their laid-out size. */
+	function viewportAnchor() {
+		if (!container || !pagesEl) return null;
+		const c = container.getBoundingClientRect();
+		const p = pagesEl.getBoundingClientRect();
+		if (!p.width || !p.height) return null;
+		return { fx: (c.left + c.width / 2 - p.left) / p.width, fy: (c.top + c.height / 2 - p.top) / p.height };
+	}
+
+	function scrollToAnchor({ fx, fy }: { fx: number; fy: number }) {
+		const c = container.getBoundingClientRect();
+		const p = pagesEl.getBoundingClientRect();
+		container.scrollLeft += p.left + fx * p.width - (c.left + c.width / 2);
+		container.scrollTop += p.top + fy * p.height - (c.top + c.height / 2);
 	}
 
 	// ---- Pointing at things ----
@@ -252,7 +275,7 @@
 	</div>
 
 	<div class="pages-scroll" bind:this={container}>
-		<div class="pages" style:width={pct(zoom)}>
+		<div class="pages" style:width={pct(zoom)} bind:this={pagesEl}>
 			{#each pages as page, i (page.number)}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
@@ -457,15 +480,15 @@
 
 	.mark-label {
 		position: absolute;
-		left: -2px;
-		bottom: 100%;
+		top: -2px;
+		right: 100%;
 		padding: 0 4px;
 		font-size: 10px;
 		font-weight: 600;
 		line-height: 14px;
 		color: white;
 		background: var(--color-success);
-		border-radius: 2px 2px 0 0;
+		border-radius: 2px 0 0 2px;
 		white-space: nowrap;
 	}
 
