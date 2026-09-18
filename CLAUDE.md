@@ -259,8 +259,9 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   replaces the whole category. On expense categories, a document whose
   account has no transactions in the category also replaces the category (a
   1098's real estate taxes box). A received document with no account is
-  flagged as untied (`untied` in `tax:status`, a yellow card with the
-  warning on the Documents tab, a banner on the viewer): the warning names
+  flagged as untied (`untied` in `tax:status`, a yellow "no account" chip
+  on the Documents tab whose tooltip carries the warning, a banner on the
+  viewer): the warning names
   each category its boxes land on and the book activity there by
   counterparty account, since the whole of it is replaced. Forms whose
   category has no book transactions (a 1099-R, a K-1) lose nothing

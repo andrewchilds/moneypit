@@ -242,6 +242,15 @@
 	const reconciliationOf = (lineId: string) => data.status.reconciliations.find((r) => r.lineId === lineId);
 	const untiedOf = (docId: string) => data.status.untied.find((u) => u.documentId === docId);
 	const listPaths = (paths: string[]) => (paths.length <= 3 ? paths.join(", ") : `${paths.slice(0, 3).join(", ")} and ${paths.length - 3} more`);
+	// The account chip's tooltip on a document tied to no account: what its boxes replace
+	function untiedTitle(untied: PageData["status"]["untied"][number]): string {
+		const lines = untied.categories.map((c) =>
+			c.bookTotal !== 0
+				? `Its ${c.taxCategoryName} figure replaces the whole ${formatCurrency(c.bookTotal)} the books have there, from ${listPaths(c.accounts.map((a) => a.path))}.`
+				: `Its ${c.taxCategoryName} figure replaces the whole category; the books have nothing there this year.`
+		);
+		return ["Not tied to an account.", ...lines, "Click to tie it to one so it replaces only that account's figure."].join("\n");
+	}
 	const reconciliationLabel = { matched: "Matched", variance: "Variance", no_transactions: "No transactions" } as const;
 	const reconciliationIcon = { matched: CircleCheck, variance: CircleAlert, no_transactions: CircleDashed } as const;
 	let shownReconciliation = $state<Reconciliation | null>(null);
@@ -632,7 +641,7 @@
 
 {#snippet formCard(doc: Doc, nested: boolean)}
 			{@const untied = untiedOf(doc.id)}
-			<section class="form-card" class:nested={nested} id="doc-{doc.id}" class:na={doc.status === "NOT_APPLICABLE"} class:untied={!!untied}>
+			<section class="form-card" class:nested={nested} id="doc-{doc.id}" class:na={doc.status === "NOT_APPLICABLE"}>
 				<header class="document-header">
 					<div>
 						<span class="mono form-type">{doc.formType}</span>
@@ -658,10 +667,12 @@
 								class:warn={!!untied}
 								title={doc.account
 									? "Tied to this account: the document replaces the book total from it. Click to change."
-									: "Tied to no account: the document replaces the whole category. Click to tie it to one."}
+									: untied
+										? untiedTitle(untied)
+										: "Tied to no account: the document replaces the whole category. Click to tie it to one."}
 								onclick={() => (editingAccountDocId = doc.id)}
 							>
-								<Link2 size={12} />
+								{#if untied}<TriangleAlert size={12} />{:else}<Link2 size={12} />{/if}
 								{doc.account?.path ?? "no account"}
 							</button>
 						{/if}
@@ -703,27 +714,6 @@
 						</form>
 					</div>
 				</header>
-
-				{#if untied}
-					<div class="untied-warning">
-						<TriangleAlert size={16} />
-						<div>
-							<p>
-								<strong>Not tied to an account.</strong>
-								{#each untied.categories as c, i (c.taxCategoryId)}
-									{#if c.bookTotal !== 0}
-										Its {c.taxCategoryName} figure replaces the whole {formatCurrency(c.bookTotal)} the books have there from {listPaths(c.accounts.map((a) => a.path))}, not just this institution's share.
-									{:else}
-										Its {c.taxCategoryName} figure replaces the whole category, though the books have nothing there this year.
-									{/if}
-									{i < untied.categories.length - 1 ? " " : ""}
-								{/each}
-								<button type="button" class="link-button" onclick={() => (editingAccountDocId = doc.id)}>Tie it to an account</button>
-								so it replaces only that account's figure.
-							</p>
-						</div>
-					</div>
-				{/if}
 
 				{#if doc.lines.length > 0}
 					<table class="table lines">
@@ -1556,8 +1546,16 @@
 	}
 
 	.chip.unset.warn {
+		background: var(--color-warning-light);
+		border-style: solid;
 		border-color: var(--color-warning);
-		color: #b8860b;
+		color: #8a6d00;
+		font-weight: 500;
+	}
+
+	.chip.unset.warn:hover {
+		background: var(--color-warning-light);
+		filter: brightness(0.97);
 	}
 
 	/* A category chip stacks the name over its schedule line */
@@ -1615,40 +1613,6 @@
 
 	.form-card.na {
 		opacity: 0.7;
-	}
-
-	.form-card.untied {
-		padding: var(--spacing-sm) var(--spacing-md);
-		background: var(--color-warning-light);
-		border-left: 3px solid var(--color-warning);
-		border-radius: var(--radius-md);
-	}
-
-	.untied-warning {
-		display: flex;
-		gap: var(--spacing-sm);
-		margin-top: var(--spacing-sm);
-		font-size: 13px;
-	}
-
-	.untied-warning :global(svg) {
-		flex-shrink: 0;
-		margin-top: 2px;
-		color: #b8860b;
-	}
-
-	.untied-warning p {
-		margin: 0;
-	}
-
-	.link-button {
-		padding: 0;
-		border: none;
-		background: none;
-		font: inherit;
-		color: var(--color-primary);
-		text-decoration: underline;
-		cursor: pointer;
 	}
 
 	.document-header .form-type {
