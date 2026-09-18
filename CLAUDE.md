@@ -296,7 +296,10 @@ visible at `/tax/<year>` and via `bin/mp tax:status`:
   Opening a document at `/tax/documents/<id>` shows the file beside the form's boxes:
   clicking a figure on the page (or dragging a box around one) fills the
   selected box and remembers where on the page it came from, so each line can be
-  traced back to the form. Boxes can also be typed in there without a file.
+  traced back to the form. When the selected box is empty or zero the figure is
+  saved straight in and the selection moves to the next empty box; otherwise (a
+  box with a value, or none selected) a popover asks which box and amount to
+  save. Boxes can also be typed in there without a file.
 - **Expected documents** are inferred from the year's transactions (interest
   received implies a 1099-INT, brokerage withdrawals a 1099-B, retirement
   distributions a 1099-R, mortgage interest a 1098) and from answers

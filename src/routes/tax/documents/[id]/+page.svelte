@@ -156,9 +156,18 @@
 	const nextEmptyBox = (after?: string) =>
 		presetBoxes.find((b) => b.box !== after && !lineFor(b.box))?.box ?? presetBoxes[0]?.box ?? "";
 
-	$effect(() => {
+	// A selected box that is empty (or zero) takes the clicked figure directly;
+	// anything else goes through the popover.
+	$effect.pre(() => {
 		if (!pick) return;
 		const figure = parseFigure(pick.text);
+		if (figure !== null && activeBox && !parseFigure(drafts[activeBox] ?? "")) {
+			const picked = pick;
+			pick = null;
+			dirty.delete(activeBox);
+			untrack(() => void saveFigure(activeBox!, figureInput(Math.abs(figure)), "", picked));
+			return;
+		}
 		pickAmount = figure === null ? "" : figureInput(Math.abs(figure));
 		pickBox = activeBox ?? nextEmptyBox();
 		if (!presetBoxes.some((b) => b.box === pickBox)) {
@@ -178,14 +187,20 @@
 		if (!pick) return;
 		const box = pickBox === "__other" ? pickCustomBox.trim() : pickBox;
 		if (!box || !pickAmount.trim()) return;
+		if (await saveFigure(box, pickAmount, pickCategory, pick)) pick = null;
+	}
+
+	// Save a figure read off the file into a box, with the region it came from,
+	// then move the selection on to the next empty box.
+	async function saveFigure(box: string, amount: string, category: string, from: Pick): Promise<boolean> {
 		const label = presetBoxes.find((b) => b.box === box)?.label ?? lineFor(box)?.label ?? "";
-		const region = { page: String(pick.page), x: String(pick.x), y: String(pick.y), w: String(pick.w), h: String(pick.h) };
-		const saved = await post("addLine", { box, label, amount: pickAmount, category: pickCategory, ...region });
+		const region = { page: String(from.page), x: String(from.x), y: String(from.y), w: String(from.w), h: String(from.h) };
+		const saved = await post("addLine", { box, label, amount, category, ...region });
 		if (saved) {
-			pick = null;
 			selectedLineId = lineFor(box)?.id ?? null;
 			activeBox = nextEmptyBox(box) || null;
 		}
+		return saved;
 	}
 
 	function onPickKeydown(e: KeyboardEvent) {
