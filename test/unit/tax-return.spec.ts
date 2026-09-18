@@ -64,7 +64,7 @@ function input(overrides: Partial<ReturnInput> = {}): ReturnInput {
 		medicareWages: 0,
 		interest: { taxable: [], taxExempt: 0 },
 		dividends: { ordinary: [], qualified: 0, ordinaryIncludesQualified: false },
-		retirement: { gross: 0, taxable: 0 },
+		retirement: { gross: 0, taxable: 0, rothDistributions: 0, rothBasis: 0 },
 		capitalGains: { shortTerm: 0, longTerm: 0, distributions: 0, partnershipShort: 0, partnershipLong: 0, rows: [] },
 		section1256: [],
 		unemployment: 0,
@@ -524,11 +524,52 @@ describe('self-employment deductions', () => {
 		expect(r.forms.find((f) => f.id === 'f1040')?.lines.find((l) => l.line === '12e')?.detail).toContain('itemizing would give 4,000.00');
 	});
 
-	it('notes a nontaxable retirement distribution needs Form 8606', () => {
-		const r = computeReturn(input({ retirement: { gross: 30000, taxable: 0 } }), c2025);
+	it('notes a nontaxable traditional IRA distribution needs Form 8606 Part I', () => {
+		const r = computeReturn(input({ retirement: { gross: 30000, taxable: 0, rothDistributions: 0, rothBasis: 0 } }), c2025);
 		expect(line(r, 'f1040', '4a')).toBe(30000);
 		expect(line(r, 'f1040', '4b')).toBe(0);
-		expect(r.warnings.some((w) => w.includes('Form 8606'))).toBe(true);
+		expect(r.forms.some((f) => f.id === 'f8606')).toBe(false);
+		expect(r.warnings.some((w) => w.includes('Form 8606 Part I'))).toBe(true);
+	});
+});
+
+describe('Form 8606 Part III', () => {
+	it('returns a Roth distribution within the contribution basis tax-free', () => {
+		// The 2025 Vanguard 1099-R: 30,000 out of a Roth IRA with 31,541.76 of contributions
+		const r = computeReturn(input({ retirement: { gross: 30000, taxable: 0, rothDistributions: 30000, rothBasis: 31541.76 } }), c2025);
+		expect(line(r, 'f8606', '19')).toBe(30000);
+		expect(line(r, 'f8606', '21')).toBe(30000);
+		expect(line(r, 'f8606', '22')).toBe(31541.76);
+		expect(line(r, 'f8606', '23')).toBe(0);
+		expect(line(r, 'f8606', '25c')).toBeUndefined();
+		expect(line(r, 'f1040', '4a')).toBe(30000);
+		expect(line(r, 'f1040', '4b')).toBe(0);
+		const basis = r.carryovers.find((c) => c.key === 'roth_basis');
+		expect(basis?.amount).toBe(1541.76);
+		expect(basis?.carryForward).toBe(true);
+		expect(r.warnings.some((w) => w.includes('Form 5329'))).toBe(false);
+		expect(r.warnings.some((w) => w.includes('treated as nontaxable'))).toBe(false);
+		// Sequence 48: after Schedule 8812 (47) and before Form 8995 (55)
+		const ids = r.forms.map((f) => f.id);
+		expect(ids.indexOf('f8606')).toBeGreaterThan(ids.indexOf('f1040sse'));
+	});
+
+	it('taxes the part of a Roth distribution past the basis on line 4b', () => {
+		const r = computeReturn(input({ retirement: { gross: 12000, taxable: 2000, rothDistributions: 10000, rothBasis: 7500.5 } }), c2025);
+		expect(line(r, 'f8606', '23')).toBe(2499.5);
+		expect(line(r, 'f8606', '25a')).toBe(2499.5);
+		expect(line(r, 'f8606', '25c')).toBe(2499.5);
+		// The other 1099-R's 2,000 plus Form 8606 line 25c
+		expect(line(r, 'f1040', '4b')).toBe(4499.5);
+		expect(line(r, 'f1040', '4a')).toBe(12000);
+		expect(r.carryovers.find((c) => c.key === 'roth_basis')?.amount).toBe(0);
+		expect(r.warnings.some((w) => w.includes('Form 5329'))).toBe(true);
+	});
+
+	it('produces no Form 8606 without a Roth distribution', () => {
+		const r = computeReturn(input({ retirement: { gross: 0, taxable: 0, rothDistributions: 0, rothBasis: 31541.76 } }), c2025);
+		expect(r.forms.some((f) => f.id === 'f8606')).toBe(false);
+		expect(r.carryovers.some((c) => c.key === 'roth_basis')).toBe(false);
 	});
 });
 

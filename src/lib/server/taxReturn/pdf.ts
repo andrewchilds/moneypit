@@ -440,6 +440,24 @@ const MAPS_2025: Record<FormId, FormFieldMap> = {
 		// Column (b) is headed "(Loss)" and line 2's column (b) has printed parentheses
 		parenthesized: ['1.loss.1', '1.loss.2', '1.loss.3', '2.loss']
 	},
+	f8606: {
+		file: 'f8606.pdf',
+		// Name and number on page 1; Part III is on page 2, lines 19 to 25c in order
+		fields: {
+			name: 'f1_01[0]',
+			ssn: 'f1_02[0]',
+			'19': 'f2_07[0]',
+			'20': 'f2_08[0]',
+			'21': 'f2_09[0]',
+			'22': 'f2_10[0]',
+			'23': 'f2_11[0]',
+			'24': 'f2_12[0]',
+			'25a': 'f2_13[0]',
+			'25b': 'f2_14[0]',
+			'25c': 'f2_15[0]'
+		},
+		checks: {}
+	},
 	f8995: {
 		file: 'f8995.pdf',
 		fields: {

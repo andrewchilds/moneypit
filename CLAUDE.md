@@ -391,7 +391,7 @@ draft Form 1040 with its schedules: Schedule C per business (with Part V
 listing the categories behind line 27b and cost of goods sold on line 4),
 Schedule SE per owner, Form 8995 (simplified QBI, with the loss carryforward
 on line 16), Schedules 1, 2, 3, A and B, Form 8949 with Schedule D and
-Form 6781 (below), Schedule 8812 (child tax credit
+Form 6781 (below), Form 8606 Part III (below), Schedule 8812 (child tax credit
 and the refundable additional child tax credit) and Schedule EIC with the
 earned income credit (figured the way the EIC table is, at the midpoint of
 each $50 range), through withholding, estimated payments and the refund or
@@ -405,7 +405,14 @@ and SEP; the excess goes to Schedule A medical. Dependents come from the
 dependents table and decide who is a qualifying child for the EIC; without
 them the EIC assumes the `qualifying_children` count and Schedule EIC is not
 produced. A 1099-R box 2a mapped to the "Form 1040 Line 4b" category reaches
-line 4b through the report.
+line 4b through the report. A 1099-R tied to a `ROTH_RETIREMENT` account is
+a Roth IRA distribution: its box 1 goes on Form 8606 Part III line 19
+against the carry-forward `roth_basis` answer on line 22 (box 2a is not
+used and should be left off), line 25c is what reaches line 4b, the
+distribution is assumed nonqualified (code J or T) with a warning, and a
+line 23 above zero warns that Form 5329 is not produced. Distributions
+outside Roth IRAs use box 2a as before, with a warning that Part I is not
+produced when box 2a is under box 1.
 
 The computation is a pure function of a `ReturnInput` assembled by `getTaxReturn` in
 `src/lib/server/actions/taxReturn.ts`: category totals come from the tax
@@ -468,12 +475,17 @@ the 80% limit is not applied) on `us-personal-base`, and per business
 which the home office worksheet adds to the allowable expenses under the
 same gross income limit). The computation runs the Capital Loss Carryover
 Worksheet and lists next year's figures in `carryovers` (capital loss
-short and long, qualified business loss, home office per business; a
-carryover that came in and was used up is listed at zero): `return:show`
+short and long, qualified business loss, home office per business, and the
+Roth basis left after a Form 8606; a carryover that came in and was used
+up is listed at zero): `return:show`
 prints them as a "Carryovers to <year+1>" block with the `fact:set` line
 that records each, and `/reports/tax/return` shows the same table with a
 "Record for <year+1>" button per row (a `record` form action that sets the
-answer; the row reads "Recorded" once next year's answer matches). A year
+answer; the row reads "Recorded" once next year's answer matches). A
+carryover whose question is carry-forward (`roth_basis`) is flagged
+`carryForward`: recording it would change this return too, so the CLI
+prints the `fact:set` line without a year to run once the return is filed,
+the page shows that note instead of the button, and the action refuses it. A year
 without a constants table says so and names what to add. The
 PDF field maps mark lines whose parentheses are pre-printed on the form
 (`parenthesized`) so a loss prints without a second pair.

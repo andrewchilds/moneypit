@@ -103,7 +103,7 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 	let socialSecurityWages = 0;
 	let medicareWages = 0;
 	const withholding = { w2: 0, forms1099: 0 };
-	const retirement = { gross: 0, taxable: 0 };
+	const retirement = { gross: 0, taxable: 0, rothDistributions: 0, rothBasis: asNumber(book.get('roth_basis')) };
 	let unemployment = 0;
 	let stateRefund = 0;
 	// Form 8949 rows from the 1099-Bs, and the net gain each box's line puts in a category (subtracted below so it is not counted twice)
@@ -130,7 +130,15 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 				const gross = box('1');
 				const taxable = box('2a');
 				if (gross && !gross.mapped) retirement.gross += gross.amount;
-				if (taxable && !taxable.mapped) retirement.taxable += taxable.amount;
+				if (doc.account?.assetType === 'ROTH_RETIREMENT') {
+					// A Roth IRA distribution: Form 8606 Part III figures the taxable part from the basis answer, not box 2a
+					if (gross && !gross.mapped) retirement.rothDistributions += gross.amount;
+					if (taxable && taxable.amount !== 0) {
+						notes.push(
+							`1099-R from ${doc.issuer} is a Roth IRA distribution (its account is a Roth IRA), so Form 8606 figures the taxable amount; box 2a (${money(taxable.amount)}) is ${taxable.mapped ? 'mapped to a tax category and reaches line 4b through the report on top of it; unmap or delete the line' : 'ignored'}.`
+						);
+					}
+				} else if (taxable && !taxable.mapped) retirement.taxable += taxable.amount;
 				else if (gross && !gross.mapped && !taxable) {
 					retirement.taxable += gross.amount;
 					notes.push(`1099-R from ${doc.issuer} has no box 2a; the gross distribution was treated as fully taxable.`);
@@ -188,6 +196,9 @@ export async function getTaxReturn(bookId: string, year: number): Promise<TaxRet
 	}
 	// A 1099-R box 2a mapped to a category reaches line 4b through the report
 	retirement.taxable += reported(categoryOn(form1040, '4b'));
+	if (retirement.rothDistributions > 0 && !book.has('roth_basis')) {
+		notes.push(`Roth IRA distributions of ${money(retirement.rothDistributions)} are entered but "Total Roth IRA contributions to date (basis)" is unanswered, so Form 8606 treats the whole amount as taxable.`);
+	}
 
 	const taxExempt = report.nonDeductible.income.find((c) => c.taxCategoryName === 'Tax Exempt');
 	const netOnly = (category: TaxCategoryTotal | undefined) => round2(reported(category) - (category?.taxCategoryId ? (rowGainsByCategory.get(category.taxCategoryId) ?? 0) : 0));

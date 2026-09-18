@@ -66,7 +66,7 @@ const fileSelect = { id: true, filename: true, mimeType: true, size: true, creat
 
 const documentInclude = {
 	lines: { orderBy: { box: 'asc' as const }, include: { taxCategory: { select: { id: true, name: true, scheduleRef: true } } } },
-	account: { select: { id: true, path: true } },
+	account: { select: { id: true, path: true, assetType: true } },
 	business: { select: { id: true, name: true } },
 	file: { select: fileSelect }
 };

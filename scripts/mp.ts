@@ -857,7 +857,12 @@ async function main() {
 						const label = c.businessName ? `${c.label} — ${c.businessName}` : c.label;
 						console.log(`  ${label.padEnd(69)} ${money(c.amount).padStart(14)}`);
 						console.log(`             ${c.detail}`);
-						console.log(`             bin/mp fact:set ${c.key} ${c.amount} --year ${year + 1}${c.businessId ? ` --business ${c.businessId}` : ""}`);
+						if (c.carryForward) {
+							console.log(`             The answer applies to every year until changed, so recording it now changes this return; once ${year} is filed:`);
+							console.log(`             bin/mp fact:set ${c.key} ${c.amount}`);
+						} else {
+							console.log(`             bin/mp fact:set ${c.key} ${c.amount} --year ${year + 1}${c.businessId ? ` --business ${c.businessId}` : ""}`);
+						}
 					}
 				}
 				if (computation.warnings.length > 0) {

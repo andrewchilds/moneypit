@@ -34,6 +34,11 @@ export const actions: Actions = {
 		const amount = Number(data.get('amount'));
 		const year = parseInt(url.searchParams.get('year') ?? '', 10);
 		if (!key || !Number.isFinite(amount) || !Number.isFinite(year)) return fail(400, { error: 'A carryover needs a question, an amount and a year' });
+		// A carry-forward answer has no year, so recording it would change this return too
+		const result = await getTaxReturn(locals.bookId, year);
+		if (result.available && result.computation.carryovers.some((c) => c.key === key && c.businessId === businessId && c.carryForward)) {
+			return fail(400, { error: `${key} applies to every year until changed; record it once the ${year} return is filed.` });
+		}
 		try {
 			await setTaxFact(locals.bookId, key, amount, year + 1, businessId);
 			return { success: true };

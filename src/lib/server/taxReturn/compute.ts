@@ -9,12 +9,13 @@
  * extension payment), Schedules A and B, Form 8949 (one row per 1099-B
  * box, summarised per broker) with Schedule D, Form 6781 (section 1256
  * contracts from a K-1's box 11C, split 40% short-term and 60% long-term
- * onto Schedule D lines 4 and 11), Schedule 8812 (the child tax
+ * onto Schedule D lines 4 and 11), Form 8606 Part III (a Roth IRA
+ * distribution against the contribution basis), Schedule 8812 (the child tax
  * credit and its refundable part), Schedule EIC and the earned income
  * credit, and Form 1040 through the refund or amount owed. Carryovers from
  * last year's return come in as answers (capital loss, qualified business
- * loss, net operating loss, home office) and next year's figures go out as
- * `carryovers`. What is not computed: other credits, the alternative minimum
+ * loss, net operating loss, home office, Roth basis) and next year's figures
+ * go out as `carryovers`. What is not computed: other credits, the alternative minimum
  * tax, depreciation, and the other deductions on Schedule 1-A. Each gap that
  * could apply is listed in `warnings`.
  */
@@ -24,7 +25,7 @@ import { isShortTermBox, LONG_TERM_BOXES, ROWS_PER_PAGE, SCHEDULE_D_LINE, SHORT_
 
 export type { CapitalGainRow } from './form8949';
 
-export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f8949' | 'f6781' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8995';
+export type FormId = 'f1040' | 'f1040s1' | 'f1040s2' | 'f1040s3' | 'f1040sa' | 'f1040sb' | 'f1040sc' | 'f1040sd' | 'f8949' | 'f6781' | 'f1040sse' | 'f1040sei' | 'f1040s8' | 'f8606' | 'f8995';
 
 export interface PayerFigure {
 	name: string;
@@ -118,7 +119,14 @@ export interface ReturnInput {
 		/** True when the ordinary figure came from a 1099-DIV box 1a, which already includes box 1b */
 		ordinaryIncludesQualified: boolean;
 	};
-	retirement: { gross: number; taxable: number };
+	/**
+	 * 1099-R figures: `gross` is every distribution (Form 1040 line 4a),
+	 * `taxable` the taxable amount of those not from a Roth IRA (box 2a, or
+	 * the category on line 4b); `rothDistributions` are the ones from Roth
+	 * IRAs, included in `gross`, whose taxable part Form 8606 Part III
+	 * figures against `rothBasis`, the contributions to date
+	 */
+	retirement: { gross: number; taxable: number; rothDistributions: number; rothBasis: number };
 	/**
 	 * Sales: `rows` are the Form 8949 rows (one per 1099-B box per broker);
 	 * `shortTerm` and `longTerm` are net figures with no proceeds or basis
@@ -210,6 +218,12 @@ export interface Carryover {
 	businessId: string | null;
 	businessName: string | null;
 	detail: string;
+	/**
+	 * The question is a carry-forward answer (stored without a year, so it
+	 * applies to this return as well): record it once this return is filed,
+	 * not beside it
+	 */
+	carryForward?: boolean;
 }
 
 export interface ReturnComputation {
@@ -368,7 +382,7 @@ export function capitalLossCarryover(
 }
 
 /** The order the carryovers are listed in, whatever order the forms produced them */
-const CARRYOVER_ORDER = ['capital_loss_carryover_short', 'capital_loss_carryover_long', 'qbi_loss_carryforward', 'home_office_carryover'];
+const CARRYOVER_ORDER = ['capital_loss_carryover_short', 'capital_loss_carryover_long', 'qbi_loss_carryforward', 'home_office_carryover', 'roth_basis'];
 
 const SCHEDULE_C_EXPENSE_LINES = [
 	['8', 'Advertising'],
@@ -607,6 +621,41 @@ function form6781(sources: PayerFigure[], name: string, ssn: string, warnings: s
 	return f;
 }
 
+/**
+ * Form 8606 Part III: a nonqualified Roth IRA distribution comes out of
+ * contributions first, and only the part past them (line 23) is taxable
+ * (line 25c, to Form 1040 line 4b). Parts I and II (nondeductible
+ * traditional IRA contributions, conversions) are not produced, so line 24
+ * (basis in conversions) is zero, as are the first-time homebuyer and
+ * qualified disaster lines.
+ */
+function form8606(distributions: number, basis: number, name: string, ssn: string, married: boolean, warnings: string[]): { form: FormBuilder; taxable: number; basisRemaining: number } | null {
+	if (distributions <= 0) return null;
+	const f = new FormBuilder('f8606', 'Form 8606', 'Nondeductible IRAs (Part III, Distributions From Roth IRAs)');
+	f.text('name', 'Name', name);
+	f.text('ssn', 'Your social security number', ssn);
+	const line19 = f.amount('19', 'Total nonqualified distributions from Roth IRAs', distributions, 'input', 'Box 1 of the 1099-Rs from Roth IRA accounts');
+	const line20 = f.amount('20', 'Qualified first-time homebuyer expenses', 0, 'input');
+	const line21 = f.amount('21', 'Line 19 less line 20', Math.max(0, line19 - line20));
+	const line22 = f.amount('22', 'Basis in Roth IRA contributions', basis, 'input', 'Total Roth IRA contributions to date, as answered');
+	// Line 23 prints as -0- when the basis covers the distribution, and lines 24 and 25 stay blank
+	const line23 = f.amount('23', 'Line 21 less line 22 (not below zero)', Math.max(0, line21 - line22), 'result', line22 >= line21 ? 'The distribution is a return of contributions, so nothing reaches line 4b' : undefined);
+	let taxable = 0;
+	if (line23 > 0) {
+		const line24 = f.amount('24', 'Basis in conversions and rollovers to Roth IRAs', 0, 'input');
+		const line25a = f.amount('25a', 'Line 23 less line 24 (not below zero)', Math.max(0, line23 - line24));
+		const line25b = f.amount('25b', 'Amount on line 25a attributable to qualified disaster distributions', 0, 'input');
+		taxable = f.amount('25c', 'Taxable amount (to Form 1040 line 4b)', line25a - line25b, 'result');
+		warnings.push(
+			`Form 8606 line 23 is ${money(line23)}: the Roth IRA distributions exceed the contribution basis, so that much is taxable on line 4b and, if you were under 59½, subject to the 10% additional tax on Form 5329, which is not produced. Line 24 (basis in conversions and rollovers) is taken as zero.`
+		);
+	}
+	warnings.push(
+		`Form 8606 Part III treats the ${money(distributions)} of Roth IRA distributions as nonqualified (box 7 code J or T on the 1099-R). A qualified distribution (code Q: age 59½ and the account open five years) is not taxable and needs no Form 8606; delete the document's box 1 line in that case${married ? '. The form is in the taxpayer’s name; file it in the spouse’s name if the Roth IRA is theirs' : ''}.`
+	);
+	return { form: f, taxable, basisRemaining: Math.max(0, round2(line22 - line21)) };
+}
+
 export function computeReturn(input: ReturnInput, constants: TaxYearConstants): ReturnComputation {
 	const warnings: string[] = [...input.notes];
 	const status: FilingStatus = input.filingStatus ?? 'single';
@@ -730,14 +779,36 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 		input.dividends.ordinaryIncludesQualified ? 'Box 1a of the 1099-DIV, which includes qualified dividends' : 'Ordinary plus qualified dividends recorded in the books'
 	);
 	f1040.amount('4a', 'IRA distributions', input.retirement.gross, 'input');
-	const line4b = f1040.amount('4b', 'Taxable amount', input.retirement.taxable, 'input');
+	const f8606 = form8606(input.retirement.rothDistributions, input.retirement.rothBasis, `${id.firstName} ${id.lastName}`.trim(), id.ssn, married, warnings);
+	const line4b = f1040.amount(
+		'4b',
+		'Taxable amount',
+		input.retirement.taxable + (f8606?.taxable ?? 0),
+		'input',
+		f8606 ? `${money(input.retirement.taxable)} from the other 1099-Rs plus ${money(f8606.taxable)} from Form 8606 line 25c` : undefined
+	);
 	if (input.retirement.gross > 0) {
 		warnings.push('Retirement distributions were placed on line 4 (IRA distributions); move pension or annuity amounts to line 5 by hand.');
 	}
-	if (input.retirement.gross > input.retirement.taxable) {
+	const otherGross = round2(input.retirement.gross - input.retirement.rothDistributions);
+	if (otherGross > input.retirement.taxable) {
 		warnings.push(
-			`${money(input.retirement.gross - input.retirement.taxable)} of the retirement distributions is treated as nontaxable; Form 8606 (Roth IRA or nondeductible IRA basis) supports that and is not produced.`
+			`${money(otherGross - input.retirement.taxable)} of the retirement distributions outside Roth IRAs is treated as nontaxable; Form 8606 Part I (nondeductible traditional IRA basis) supports that and is not produced.`
 		);
+	}
+	if (f8606) {
+		carryovers.push({
+			key: 'roth_basis',
+			label: 'Roth IRA contribution basis',
+			amount: f8606.basisRemaining,
+			businessId: null,
+			businessName: null,
+			detail:
+				f8606.basisRemaining > 0
+					? `Form 8606 line 22 less the ${money(f8606.form.get('21'))} of contributions returned on line 21`
+					: 'The distributions used up the contribution basis on Form 8606 line 22',
+			carryForward: true
+		});
 	}
 
 	// Form 8949 and Schedule D
@@ -1264,6 +1335,7 @@ export function computeReturn(input: ReturnInput, constants: TaxYearConstants): 
 	for (const se of scheduleSEs) forms.push(se.form.form);
 	if (scheduleEIC) forms.push(scheduleEIC.form);
 	if (s8812) forms.push(s8812.form);
+	if (f8606) forms.push(f8606.form.form);
 	if (f8995) forms.push(f8995.form);
 	if (f6781) forms.push(f6781.form);
 
